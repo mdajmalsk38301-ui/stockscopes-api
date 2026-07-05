@@ -1,74 +1,57 @@
 from flask import Flask, jsonify
 import requests
 from datetime import datetime, timedelta
+import time
 
 app = Flask(__name__)
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+BASE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
-    "Referer": "https://www.nseindia.com/market-data/all-upcoming-issues-ipo",
-    "X-Requested-With": "XMLHttpRequest"
 }
 
 def get_nse_session():
     s = requests.Session()
-    s.get("https://www.nseindia.com", headers=HEADERS, timeout=15)
-    s.get("https://www.nseindia.com/market-data/all-upcoming-issues-ipo", headers=HEADERS, timeout=15)
+    s.headers.update(BASE_HEADERS)
+    # Hit homepage first
+    s.get("https://www.nseindia.com", timeout=15)
+    time.sleep(2)
+    # Hit the specific page to get cookies
+    s.get("https://www.nseindia.com/companies-listing/corporate-filings-actions", timeout=15)
+    time.sleep(1)
     return s
 
 @app.route("/")
 def home():
-    return jsonify({"status": "StockScopes API running", "version": "2.0"})
+    return jsonify({"status": "StockScopes API running", "version": "3.0"})
 
 @app.route("/ipo-data")
 def ipo_data():
     try:
         s = get_nse_session()
         result = []
-
-        for status in ["current", "upcoming", "closed"]:
+        for status in ["current", "upcoming"]:
             try:
                 url = f"https://www.nseindia.com/api/public-offer?category=ipo&status={status}"
-                resp = s.get(url, headers=HEADERS, timeout=15)
+                resp = s.get(url, timeout=15)
                 if resp.status_code == 200 and resp.text.strip():
                     data = resp.json()
                     if isinstance(data, list):
                         for item in data:
-                            item["_status"] = get_status(
+                            item["_status"] = "Upcoming" if status == "upcoming" else get_status(
                                 item.get("openDate", ""),
                                 item.get("closeDate", "")
-                            ) if status != "upcoming" else "Upcoming"
+                            )
                         result += data
+                time.sleep(1)
             except Exception as e:
                 continue
-
-        if not result:
-            # Fallback: try Chittorgarh
-            result = fetch_ipo_chittorgarh()
-
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-def fetch_ipo_chittorgarh():
-    try:
-        url = "https://www.chittorgarh.com/report/ipo-subscription-status-live-data/93/"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json"
-        }
-        resp = requests.get(url, headers=headers, timeout=15)
-        if resp.status_code == 200 and resp.text.strip():
-            data = resp.json()
-            if isinstance(data, list):
-                return data
-        return []
-    except:
-        return []
 
 @app.route("/corp-actions")
 def corp_actions():
@@ -78,13 +61,55 @@ def corp_actions():
         future = today + timedelta(days=30)
         from_date = today.strftime("%d-%m-%Y")
         to_date = future.strftime("%d-%m-%Y")
-        url = f"https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date={from_date}&to_date={to_date}"
-        resp = s.get(url, headers=HEADERS, timeout=15)
-        if resp.status_code == 200 and resp.text.strip():
-            return jsonify(resp.json())
-        return jsonify({"error": f"NSE returned {resp.status_code}"}), 500
+
+        # Try multiple NSE endpoints
+        urls = [
+            f"https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date={from_date}&to_date={to_date}",
+            f"https://www.nseindia.com/api/corporates-corporateActions?index=equities&from_date={from_date}&to_date={to_date}&csv=false",
+        ]
+
+        for url in urls:
+            try:
+                resp = s.get(url, timeout=15)
+                if resp.status_code == 200 and resp.text.strip() and resp.text.strip() != "[]":
+                    data = resp.json()
+                    if isinstance(data, list) and len(data) > 0:
+                        return jsonify(data)
+                time.sleep(2)
+            except Exception as e:
+                continue
+
+        # Fallback: BSE corporate actions
+        return fetch_bse_corp_actions(from_date, to_date)
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+def fetch_bse_corp_actions(from_date, to_date):
+    try:
+        s = requests.Session()
+        s.headers.update(BASE_HEADERS)
+        s.headers.update({"Referer": "https://www.bseindia.com/"})
+        s.get("https://www.bseindia.com", timeout=15)
+        time.sleep(2)
+        url = f"https://api.bseindia.com/BseIndiaAPI/api/DefaultData/w?scripcode=&segment=Equity&status=Active&from_date={from_date}&to_date={to_date}&mydata="
+        resp = s.get(url, timeout=15)
+        if resp.status_code == 200 and resp.text.strip():
+            raw = resp.json()
+            data = raw.get("Table", [])
+            result = []
+            for item in data:
+                result.append({
+                    "comp": item.get("LONG_NAME", ""),
+                    "symbol": item.get("SCRIP_CD", ""),
+                    "subject": item.get("PURPOSE", ""),
+                    "exDate": item.get("EX_DATE", ""),
+                    "recDate": item.get("REC_DT", ""),
+                })
+            return jsonify(result)
+        return jsonify({"error": "BSE also returned no data"}), 500
+    except Exception as e:
+        return jsonify({"error": "BSE fallback failed: " + str(e)}), 500
 
 def get_status(open_date, close_date):
     try:
