@@ -94,19 +94,31 @@ def fetch_bse_corp_actions(from_date, to_date):
         time.sleep(2)
         url = f"https://api.bseindia.com/BseIndiaAPI/api/DefaultData/w?scripcode=&segment=Equity&status=Active&from_date={from_date}&to_date={to_date}&mydata="
         resp = s.get(url, timeout=15)
-        if resp.status_code == 200 and resp.text.strip():
+
+if resp.status_code == 200 and resp.text.strip():
             raw = resp.json()
-            data = raw.get("Table", [])
+            # Handle both list and dict responses
+            if isinstance(raw, list):
+                data = raw
+            elif isinstance(raw, dict):
+                data = raw.get("Table", raw.get("data", []))
+            else:
+                data = []
             result = []
             for item in data:
-                result.append({
-                    "comp": item.get("LONG_NAME", ""),
-                    "symbol": item.get("SCRIP_CD", ""),
-                    "subject": item.get("PURPOSE", ""),
-                    "exDate": item.get("EX_DATE", ""),
-                    "recDate": item.get("REC_DT", ""),
-                })
+                if isinstance(item, dict):
+                    result.append({
+                        "comp": item.get("LONG_NAME", item.get("comp", "")),
+                        "symbol": item.get("SCRIP_CD", item.get("symbol", "")),
+                        "subject": item.get("PURPOSE", item.get("subject", "")),
+                        "exDate": item.get("EX_DATE", item.get("exDate", "")),
+                        "recDate": item.get("REC_DT", item.get("recDate", "")),
+                    })
             return jsonify(result)
+
+
+
+        
         return jsonify({"error": "BSE also returned no data"}), 500
     except Exception as e:
         return jsonify({"error": "BSE fallback failed: " + str(e)}), 500
