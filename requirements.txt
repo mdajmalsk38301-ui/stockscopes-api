@@ -2,3 +2,4 @@ flask
 requests
 gunicorn
 bse
+jugaad-data
