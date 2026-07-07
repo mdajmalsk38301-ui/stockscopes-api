@@ -84,3 +84,21 @@ def get_status(open_date, close_date):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
+
+from jugaad_data.nse import NSELive
+
+@app.route('/market-movers')
+def market_movers():
+    try:
+        n = NSELive()
+        data = n.market_status()  # confirms market open/closed
+        gainers = n.pre_open_market('NIFTY GAINERS')
+        losers = n.pre_open_market('NIFTY LOSERS')
+        indices = n.index_option_chain('NIFTY') if False else None  # placeholder, optional
+        return jsonify({
+            "gainers": gainers,
+            "losers": losers
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
