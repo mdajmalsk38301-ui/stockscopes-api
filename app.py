@@ -23,7 +23,7 @@ def get_nse_session():
 
 @app.route("/")
 def home():
-    return jsonify({"status": "StockScopes API running", "version": "4.0"})
+    return jsonify({"status": "StockScopes API running", "version": "5.0"})
 
 @app.route("/ipo-data")
 def ipo_data():
@@ -31,28 +31,29 @@ def ipo_data():
         s = get_nse_session()
         result = []
         for status in ["current", "upcoming"]:
-            try:
-                url = f"https://www.nseindia.com/api/public-offer?category=ipo&status={status}"
-                resp = s.get(url, timeout=15)
-                if resp.status_code == 200 and resp.text.strip():
-                    data = resp.json()
-                    if isinstance(data, list):
-                        for item in data:
-                            item["_status"] = "Upcoming" if status == "upcoming" else get_status(
-                                item.get("openDate", ""),
-                                item.get("closeDate", "")
-                            )
-                        result += data
-                time.sleep(1)
-            except:
-                continue
+            for category in ["ipo", "sme"]:
+                try:
+                    url = f"https://www.nseindia.com/api/public-offer?category={category}&status={status}"
+                    resp = s.get(url, timeout=15)
+                    if resp.status_code == 200 and resp.text.strip():
+                        data = resp.json()
+                        if isinstance(data, list):
+                            for item in data:
+                                item["_status"] = "Upcoming" if status == "upcoming" else get_status(
+                                    item.get("openDate", ""),
+                                    item.get("closeDate", "")
+                                )
+                                item["_category"] = category.upper()
+                            result += data
+                    time.sleep(1)
+                except:
+                    continue
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/corp-actions")
 def corp_actions():
-    # Try NSE first
     try:
         s = get_nse_session()
         today = datetime.now()
@@ -65,34 +66,9 @@ def corp_actions():
             data = resp.json()
             if isinstance(data, list) and len(data) > 0:
                 return jsonify(data)
-    except:
-        pass
-
-    # Fallback: BSE Python package
-    try:
-        from bse import BSE
-        today = datetime.now()
-        future = today + timedelta(days=30)
-        b = BSE(download_folder="/tmp/")
-        actions = b.actions(
-            segment="equity",
-            from_date=today.strftime("%Y%m%d"),
-            to_date=future.strftime("%Y%m%d")
-        )
-        b.exit()
-        result = []
-        if isinstance(actions, list):
-            for item in actions:
-                result.append({
-                    "comp": item.get("companyName", item.get("scrip_cd", "")),
-                    "symbol": item.get("scrip_cd", ""),
-                    "subject": item.get("purpose", ""),
-                    "exDate": item.get("ex_date", ""),
-                    "recDate": item.get("record_date", ""),
-                })
-        return jsonify(result)
+        return jsonify({"error": f"NSE returned {resp.status_code}"}), 500
     except Exception as e:
-        return jsonify({"error": "All sources failed: " + str(e)}), 500
+        return jsonify({"error": str(e)}), 500
 
 def get_status(open_date, close_date):
     try:
