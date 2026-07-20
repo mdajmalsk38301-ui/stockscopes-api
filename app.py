@@ -7,7 +7,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return jsonify({"status": "StockScopes API running", "version": "9.0"})
+    return jsonify({"status": "StockScopes API running", "version": "10.0"})
 
 @app.route("/ipo-data")
 def ipo_data():
@@ -54,8 +54,19 @@ def corp_actions():
         if not actions:
             return jsonify([])
 
-        # Return first 3 items raw so we can see exact key names
-        return jsonify(actions[:3])
+        result = []
+        for item in actions:
+            if not isinstance(item, dict):
+                continue
+            purpose = item.get("Purpose", "")
+            result.append({
+                "comp": item.get("long_name", ""),
+                "subject": purpose,
+                "exDate": item.get("Ex_date", ""),
+                "recDate": item.get("RD_Date", ""),
+            })
+
+        return jsonify(result)
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
