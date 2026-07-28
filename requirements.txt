@@ -3,3 +3,4 @@ requests
 gunicorn
 bse
 jugaad-data
+nsetools
