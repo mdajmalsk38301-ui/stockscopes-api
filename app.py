@@ -2,14 +2,27 @@ from flask import Flask, jsonify
 import requests
 from datetime import datetime, timedelta
 import time
-from nsetools import Nse
+import yfinance as yf
 
 app = Flask(__name__)
-nse = Nse()
 
 # ── simple in-memory cache for market movers ──
 _movers_cache = {"data": None, "ts": 0}
-MOVERS_CACHE_SECONDS = 60
+MOVERS_CACHE_SECONDS = 90
+
+# A fixed watchlist since yfinance has no "top gainers/losers" endpoint of its own.
+# Add/remove symbols here — .NS suffix is required for NSE tickers on Yahoo Finance.
+WATCHLIST = [
+    "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
+    "BAJFINANCE.NS", "ITC.NS", "WIPRO.NS", "TATASTEEL.NS", "SUNPHARMA.NS",
+    "HINDUNILVR.NS", "SBIN.NS", "AXISBANK.NS", "LT.NS", "MARUTI.NS",
+    "KOTAKBANK.NS", "TITAN.NS", "ASIANPAINT.NS", "BHARTIARTL.NS", "ADANIENT.NS",
+]
+
+INDEX_SYMBOLS = [
+    ("^NSEI", "NIFTY 50"),
+    ("^NSEBANK", "BANKNIFTY"),
+]
 
 
 @app.route("/")
@@ -81,35 +94,48 @@ def corp_actions():
         return jsonify({"error": str(e)}), 500
 
 
-def fmt_row(row, symbol_key="symbol", price_key="ltp", pct_key="netPrice"):
-    """Normalise an nsetools row into the shape the WP ticker plugin expects."""
-    pct = row.get(pct_key, 0)
+def fmt_quote(symbol, label, price, pct):
     return {
-        "symbol": row.get(symbol_key, ""),
-        "price": f"{row.get(price_key, 0):,.2f}",
+        "symbol": label,
+        "price": f"{price:,.2f}",
         "pct": f"{'+' if pct >= 0 else ''}{pct:.2f}",
         "up": pct >= 0,
     }
 
 
 def build_movers_payload():
-    gainers_raw = nse.get_top_gainers()
-    losers_raw = nse.get_top_losers()
+    # Batch-download via yf.Tickers — friendlier to Yahoo's rate limits than
+    # one request per symbol.
+    tickers = yf.Tickers(" ".join(WATCHLIST))
+    quotes = []
 
-    gainers = [fmt_row(r) for r in gainers_raw[:5]]
-    losers = [fmt_row(r) for r in losers_raw[:5]]
+    for symbol in WATCHLIST:
+        try:
+            hist = tickers.tickers[symbol].history(period="2d")
+            if len(hist) < 2:
+                continue
+            prev_close = hist["Close"].iloc[-2]
+            last = hist["Close"].iloc[-1]
+            pct = ((last - prev_close) / prev_close) * 100
+            label = symbol.replace(".NS", "")
+            quotes.append(fmt_quote(symbol, label, last, pct))
+        except Exception:
+            continue
+
+    quotes_sorted = sorted(quotes, key=lambda r: float(r["pct"]), reverse=True)
+    gainers = quotes_sorted[:5]
+    losers = list(reversed(quotes_sorted[-5:]))
 
     indices = []
-    for idx_symbol, label in [("NIFTY 50", "NIFTY 50"), ("NIFTY BANK", "BANKNIFTY")]:
+    for symbol, label in INDEX_SYMBOLS:
         try:
-            q = nse.get_index_quote(idx_symbol)
-            pct = float(q.get("percentChange", 0))
-            indices.append({
-                "symbol": label,
-                "price": f"{float(q.get('last', 0)):,.2f}",
-                "pct": f"{'+' if pct >= 0 else ''}{pct:.2f}",
-                "up": pct >= 0,
-            })
+            hist = yf.Ticker(symbol).history(period="2d")
+            if len(hist) < 2:
+                continue
+            prev_close = hist["Close"].iloc[-2]
+            last = hist["Close"].iloc[-1]
+            pct = ((last - prev_close) / prev_close) * 100
+            indices.append(fmt_quote(symbol, label, last, pct))
         except Exception:
             continue
 
@@ -132,4 +158,3 @@ def market_movers():
 
 if __name__ == "__main__":
     app.run(debug=True)
-    
