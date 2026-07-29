@@ -8,7 +8,7 @@ app = Flask(__name__)
 
 # ── simple in-memory cache for market movers ──
 _movers_cache = {"data": None, "ts": 0}
-MOVERS_CACHE_SECONDS = 90
+MOVERS_CACHE_SECONDS = 120
 
 # A fixed watchlist since yfinance has no "top gainers/losers" endpoint of its own.
 # Add/remove symbols here — .NS suffix is required for NSE tickers on Yahoo Finance.
@@ -94,7 +94,7 @@ def corp_actions():
         return jsonify({"error": str(e)}), 500
 
 
-def fmt_quote(symbol, label, price, pct):
+def fmt_quote(label, price, pct):
     return {
         "symbol": label,
         "price": f"{price:,.2f}",
@@ -104,38 +104,52 @@ def fmt_quote(symbol, label, price, pct):
 
 
 def build_movers_payload():
-    # Batch-download via yf.Tickers — friendlier to Yahoo's rate limits than
-    # one request per symbol.
-    tickers = yf.Tickers(" ".join(WATCHLIST))
-    quotes = []
+    all_symbols = WATCHLIST + [s for s, _ in INDEX_SYMBOLS]
 
+    # ONE batched, threaded download instead of 20+ sequential requests —
+    # this is what actually avoids the worker timeout.
+    data = yf.download(
+        tickers=" ".join(all_symbols),
+        period="5d",
+        group_by="ticker",
+        threads=True,
+        progress=False,
+        timeout=15,
+    )
+
+    def pct_change_for(symbol):
+        closes = data[symbol]["Close"].dropna()
+        if len(closes) < 2:
+            return None
+        prev_close = float(closes.iloc[-2])
+        last = float(closes.iloc[-1])
+        pct = ((last - prev_close) / prev_close) * 100
+        return last, pct
+
+    quotes = []
     for symbol in WATCHLIST:
         try:
-            hist = tickers.tickers[symbol].history(period="2d")
-            if len(hist) < 2:
+            result = pct_change_for(symbol)
+            if result is None:
                 continue
-            prev_close = hist["Close"].iloc[-2]
-            last = hist["Close"].iloc[-1]
-            pct = ((last - prev_close) / prev_close) * 100
+            last, pct = result
             label = symbol.replace(".NS", "")
-            quotes.append(fmt_quote(symbol, label, last, pct))
+            quotes.append(fmt_quote(label, last, pct))
         except Exception:
             continue
 
     quotes_sorted = sorted(quotes, key=lambda r: float(r["pct"]), reverse=True)
     gainers = quotes_sorted[:5]
-    losers = list(reversed(quotes_sorted[-5:]))
+    losers = list(reversed(quotes_sorted[-5:])) if quotes_sorted else []
 
     indices = []
     for symbol, label in INDEX_SYMBOLS:
         try:
-            hist = yf.Ticker(symbol).history(period="2d")
-            if len(hist) < 2:
+            result = pct_change_for(symbol)
+            if result is None:
                 continue
-            prev_close = hist["Close"].iloc[-2]
-            last = hist["Close"].iloc[-1]
-            pct = ((last - prev_close) / prev_close) * 100
-            indices.append(fmt_quote(symbol, label, last, pct))
+            last, pct = result
+            indices.append(fmt_quote(label, last, pct))
         except Exception:
             continue
 
