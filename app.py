@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 import requests
 from datetime import datetime, timedelta
 import time
@@ -6,12 +6,13 @@ import yfinance as yf
 
 app = Flask(__name__)
 
-# ── simple in-memory cache for market movers ──
+# ── caches ──
 _movers_cache = {"data": None, "ts": 0}
 MOVERS_CACHE_SECONDS = 120
 
-# A fixed watchlist since yfinance has no "top gainers/losers" endpoint of its own.
-# Add/remove symbols here — .NS suffix is required for NSE tickers on Yahoo Finance.
+_detail_cache = {}
+DETAIL_CACHE_SECONDS = 300
+
 WATCHLIST = [
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
     "BAJFINANCE.NS", "ITC.NS", "WIPRO.NS", "TATASTEEL.NS", "SUNPHARMA.NS",
@@ -106,8 +107,6 @@ def fmt_quote(label, price, pct):
 def build_movers_payload():
     all_symbols = WATCHLIST + [s for s, _ in INDEX_SYMBOLS]
 
-    # ONE batched, threaded download instead of 20+ sequential requests —
-    # this is what actually avoids the worker timeout.
     data = yf.download(
         tickers=" ".join(all_symbols),
         period="5d",
@@ -170,5 +169,60 @@ def market_movers():
     return jsonify(_movers_cache["data"])
 
 
+@app.route("/api/stock-detail")
+def stock_detail():
+    raw_symbol = request.args.get("symbol", "").strip().upper()
+    if not raw_symbol:
+        return jsonify({"error": "symbol query param required"}), 400
+
+    # Accept both "TCS" and "TCS.NS" and index symbols like "^NSEI"
+    yf_symbol = raw_symbol if (raw_symbol.endswith(".NS") or raw_symbol.startswith("^")) else raw_symbol + ".NS"
+
+    now = time.time()
+    cached = _detail_cache.get(yf_symbol)
+    if cached and (now - cached["ts"]) < DETAIL_CACHE_SECONDS:
+        return jsonify(cached["data"])
+
+    try:
+        ticker = yf.Ticker(yf_symbol)
+        fi = ticker.fast_info
+        hist = ticker.history(period="6mo")
+
+        if hist.empty:
+            return jsonify({"error": "no data for symbol"}), 404
+
+        history = [
+            {"date": idx.strftime("%Y-%m-%d"), "close": round(float(row["Close"]), 2)}
+            for idx, row in hist.iterrows()
+        ]
+
+        last = float(fi.get("last_price") or hist["Close"].iloc[-1])
+        prev_close = float(fi.get("previous_close") or hist["Close"].iloc[-2])
+        pct = ((last - prev_close) / prev_close) * 100 if prev_close else 0
+
+        data = {
+            "symbol": raw_symbol.replace(".NS", ""),
+            "price": f"{last:,.2f}",
+            "pct": f"{'+' if pct >= 0 else ''}{pct:.2f}",
+            "up": pct >= 0,
+            "open": f"{float(fi.get('open') or 0):,.2f}",
+            "dayHigh": f"{float(fi.get('day_high') or 0):,.2f}",
+            "dayLow": f"{float(fi.get('day_low') or 0):,.2f}",
+            "prevClose": f"{prev_close:,.2f}",
+            "yearHigh": f"{float(fi.get('year_high') or 0):,.2f}",
+            "yearLow": f"{float(fi.get('year_low') or 0):,.2f}",
+            "volume": f"{int(fi.get('last_volume') or 0):,}",
+            "marketCap": f"{float(fi.get('market_cap') or 0):,.0f}" if fi.get('market_cap') else "N/A",
+            "history": history,
+        }
+
+        _detail_cache[yf_symbol] = {"data": data, "ts": now}
+        return jsonify(data)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
 if __name__ == "__main__":
     app.run(debug=True)
+        
