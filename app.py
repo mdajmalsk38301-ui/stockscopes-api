@@ -21,9 +21,12 @@ WATCHLIST = [
     "KOTAKBANK.NS", "TITAN.NS", "ASIANPAINT.NS", "BHARTIARTL.NS", "ADANIENT.NS",
 ]
 
+# NSE indices + BSE's SENSEX (^BSESN) — SENSEX was previously only in the
+# static fallback data, never in the live feed.
 INDEX_SYMBOLS = [
     ("^NSEI", "NIFTY 50"),
     ("^NSEBANK", "BANKNIFTY"),
+    ("^BSESN", "SENSEX"),
 ]
 
 
@@ -176,7 +179,6 @@ def compute_rsi(closes, period=14):
     loss = -delta.clip(upper=0)
     avg_gain = gain.rolling(period).mean()
     avg_loss = loss.rolling(period).mean()
-    # avoid divide-by-zero
     rs = avg_gain / avg_loss.replace(0, pd.NA)
     rsi = 100 - (100 / (1 + rs))
     last_val = rsi.iloc[-1]
@@ -184,7 +186,6 @@ def compute_rsi(closes, period=14):
 
 
 def resolve_market_cap(ticker, last_price):
-    """Try several fallbacks — fast_info alone is frequently empty for NSE tickers."""
     try:
         fi = ticker.fast_info
         mc = fi.get("market_cap")
@@ -195,7 +196,7 @@ def resolve_market_cap(ticker, last_price):
                 mc = float(shares) * last_price
 
         if not mc:
-            info = ticker.info  # slower — only reached if the fast paths fail
+            info = ticker.info
             mc = info.get("marketCap")
 
         if mc:
@@ -210,25 +211,49 @@ def resolve_market_cap(ticker, last_price):
     return "N/A"
 
 
+def fetch_history_for_exchange(raw_symbol):
+    """
+    Try NSE (.NS) first, then fall back to BSE (.BO) if NSE has no data —
+    some smaller-cap or recently-listed stocks trade more actively on BSE.
+    Returns (yf_symbol, ticker, hist) or (None, None, None) if both fail.
+    Index symbols (already prefixed with ^) are tried as-is, no suffix logic.
+    """
+    if raw_symbol.startswith("^") or raw_symbol.endswith(".NS") or raw_symbol.endswith(".BO"):
+        candidates = [raw_symbol]
+    else:
+        candidates = [raw_symbol + ".NS", raw_symbol + ".BO"]
+
+    for candidate in candidates:
+        try:
+            ticker = yf.Ticker(candidate)
+            hist = ticker.history(period="1y")
+            if not hist.empty and len(hist) >= 2:
+                return candidate, ticker, hist
+        except Exception:
+            continue
+
+    return None, None, None
+
+
 @app.route("/api/stock-detail")
 def stock_detail():
     raw_symbol = request.args.get("symbol", "").strip().upper()
     if not raw_symbol:
         return jsonify({"error": "symbol query param required"}), 400
 
-    yf_symbol = raw_symbol if (raw_symbol.endswith(".NS") or raw_symbol.startswith("^")) else raw_symbol + ".NS"
-
     now = time.time()
-    cached = _detail_cache.get(yf_symbol)
+    cache_key = raw_symbol
+    cached = _detail_cache.get(cache_key)
     if cached and (now - cached["ts"]) < DETAIL_CACHE_SECONDS:
         return jsonify(cached["data"])
 
-    try:
-        ticker = yf.Ticker(yf_symbol)
-        hist = ticker.history(period="1y")
+    yf_symbol, ticker, hist = fetch_history_for_exchange(raw_symbol)
 
-        if hist.empty or len(hist) < 2:
-            return jsonify({"error": "no data for symbol"}), 404
+    if ticker is None:
+        return jsonify({"error": "no data for symbol on NSE or BSE"}), 404
+
+    try:
+        exchange = "BSE" if yf_symbol.endswith(".BO") else "NSE"
 
         last_row = hist.iloc[-1]
         prev_row = hist.iloc[-2]
@@ -246,7 +271,6 @@ def stock_detail():
 
         market_cap = resolve_market_cap(ticker, last)
 
-        # ── analytics ──
         closes = hist["Close"]
         sma50 = float(closes.rolling(50).mean().iloc[-1]) if len(closes) >= 50 else None
         sma200 = float(closes.rolling(200).mean().iloc[-1]) if len(closes) >= 200 else None
@@ -272,7 +296,8 @@ def stock_detail():
         ]
 
         data = {
-            "symbol": raw_symbol.replace(".NS", ""),
+            "symbol": raw_symbol.replace(".NS", "").replace(".BO", ""),
+            "exchange": exchange,
             "price": f"{last:,.2f}",
             "pct": f"{'+' if pct >= 0 else ''}{pct:.2f}",
             "up": pct >= 0,
@@ -294,7 +319,7 @@ def stock_detail():
             },
         }
 
-        _detail_cache[yf_symbol] = {"data": data, "ts": now}
+        _detail_cache[cache_key] = {"data": data, "ts": now}
         return jsonify(data)
 
     except Exception as e:
@@ -303,4 +328,4 @@ def stock_detail():
 
 if __name__ == "__main__":
     app.run(debug=True)
-    
+        
