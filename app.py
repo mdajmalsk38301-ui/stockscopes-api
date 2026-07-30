@@ -3,9 +3,18 @@ import requests
 from datetime import datetime, timedelta
 import time
 import yfinance as yf
+from yfinance import EquityQuery
 import pandas as pd
 
 app = Flask(__name__)
+
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "https://stockscopes.in"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    return response
+
 
 # ── caches ──
 _movers_cache = {"data": None, "ts": 0}
@@ -14,15 +23,15 @@ MOVERS_CACHE_SECONDS = 120
 _detail_cache = {}
 DETAIL_CACHE_SECONDS = 300
 
-WATCHLIST = [
+# Used ONLY as a fallback if Yahoo's India screener is unavailable —
+# real gainers/losers now come from a live market-wide screen instead.
+FALLBACK_WATCHLIST = [
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "ICICIBANK.NS",
     "BAJFINANCE.NS", "ITC.NS", "WIPRO.NS", "TATASTEEL.NS", "SUNPHARMA.NS",
     "HINDUNILVR.NS", "SBIN.NS", "AXISBANK.NS", "LT.NS", "MARUTI.NS",
     "KOTAKBANK.NS", "TITAN.NS", "ASIANPAINT.NS", "BHARTIARTL.NS", "ADANIENT.NS",
 ]
 
-# NSE indices + BSE's SENSEX (^BSESN) — SENSEX was previously only in the
-# static fallback data, never in the live feed.
 INDEX_SYMBOLS = [
     ("^NSEI", "NIFTY 50"),
     ("^NSEBANK", "BANKNIFTY"),
@@ -108,34 +117,78 @@ def fmt_quote(label, price, pct):
     }
 
 
-def build_movers_payload():
-    all_symbols = WATCHLIST + [s for s, _ in INDEX_SYMBOLS]
-
+def fetch_indices():
+    symbols = [s for s, _ in INDEX_SYMBOLS]
     data = yf.download(
-        tickers=" ".join(all_symbols),
+        tickers=" ".join(symbols),
         period="5d",
         group_by="ticker",
         threads=True,
         progress=False,
         timeout=15,
     )
-
-    def pct_change_for(symbol):
-        closes = data[symbol]["Close"].dropna()
-        if len(closes) < 2:
-            return None
-        prev_close = float(closes.iloc[-2])
-        last = float(closes.iloc[-1])
-        pct = ((last - prev_close) / prev_close) * 100
-        return last, pct
-
-    quotes = []
-    for symbol in WATCHLIST:
+    indices = []
+    for symbol, label in INDEX_SYMBOLS:
         try:
-            result = pct_change_for(symbol)
-            if result is None:
+            closes = data[symbol]["Close"].dropna()
+            if len(closes) < 2:
                 continue
-            last, pct = result
+            prev_close = float(closes.iloc[-2])
+            last = float(closes.iloc[-1])
+            pct = ((last - prev_close) / prev_close) * 100
+            indices.append(fmt_quote(label, last, pct))
+        except Exception:
+            continue
+    return indices
+
+
+def screen_movers(direction, limit=5):
+    """
+    Real, market-wide top gainers/losers via Yahoo Finance's India-region
+    equity screener — not limited to a fixed watchlist.
+    """
+    op = "gt" if direction == "gainers" else "lt"
+    query = EquityQuery("and", [
+        EquityQuery("eq", ["region", "in"]),
+        EquityQuery(op, ["percentchange", 0]),
+    ])
+    result = yf.screen(
+        query,
+        sortField="percentchange",
+        sortAsc=(direction == "losers"),
+        size=limit,
+    )
+    quotes = result.get("quotes", []) if isinstance(result, dict) else []
+
+    rows = []
+    for q in quotes[:limit]:
+        symbol = (q.get("symbol") or "").replace(".NS", "").replace(".BO", "")
+        price = q.get("regularMarketPrice")
+        pct = q.get("regularMarketChangePercent")
+        if symbol and price is not None and pct is not None:
+            rows.append(fmt_quote(symbol, float(price), float(pct)))
+    return rows
+
+
+def fallback_watchlist_movers():
+    """Used only if the live screener fails or returns nothing."""
+    data = yf.download(
+        tickers=" ".join(FALLBACK_WATCHLIST),
+        period="5d",
+        group_by="ticker",
+        threads=True,
+        progress=False,
+        timeout=15,
+    )
+    quotes = []
+    for symbol in FALLBACK_WATCHLIST:
+        try:
+            closes = data[symbol]["Close"].dropna()
+            if len(closes) < 2:
+                continue
+            prev_close = float(closes.iloc[-2])
+            last = float(closes.iloc[-1])
+            pct = ((last - prev_close) / prev_close) * 100
             label = symbol.replace(".NS", "")
             quotes.append(fmt_quote(label, last, pct))
         except Exception:
@@ -144,17 +197,19 @@ def build_movers_payload():
     quotes_sorted = sorted(quotes, key=lambda r: float(r["pct"]), reverse=True)
     gainers = quotes_sorted[:5]
     losers = list(reversed(quotes_sorted[-5:])) if quotes_sorted else []
+    return gainers, losers
 
-    indices = []
-    for symbol, label in INDEX_SYMBOLS:
-        try:
-            result = pct_change_for(symbol)
-            if result is None:
-                continue
-            last, pct = result
-            indices.append(fmt_quote(label, last, pct))
-        except Exception:
-            continue
+
+def build_movers_payload():
+    indices = fetch_indices()
+
+    try:
+        gainers = screen_movers("gainers", 5)
+        losers = screen_movers("losers", 5)
+        if not gainers or not losers:
+            raise ValueError("screener returned empty results")
+    except Exception:
+        gainers, losers = fallback_watchlist_movers()
 
     return {"indices": indices, "gainers": gainers, "losers": losers}
 
@@ -212,12 +267,6 @@ def resolve_market_cap(ticker, last_price):
 
 
 def fetch_history_for_exchange(raw_symbol):
-    """
-    Try NSE (.NS) first, then fall back to BSE (.BO) if NSE has no data —
-    some smaller-cap or recently-listed stocks trade more actively on BSE.
-    Returns (yf_symbol, ticker, hist) or (None, None, None) if both fail.
-    Index symbols (already prefixed with ^) are tried as-is, no suffix logic.
-    """
     if raw_symbol.startswith("^") or raw_symbol.endswith(".NS") or raw_symbol.endswith(".BO"):
         candidates = [raw_symbol]
     else:
