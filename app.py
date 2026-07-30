@@ -3,6 +3,7 @@ import requests
 from datetime import datetime, timedelta
 import time
 import yfinance as yf
+import pandas as pd
 
 app = Flask(__name__)
 
@@ -169,6 +170,46 @@ def market_movers():
     return jsonify(_movers_cache["data"])
 
 
+def compute_rsi(closes, period=14):
+    delta = closes.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(period).mean()
+    avg_loss = loss.rolling(period).mean()
+    # avoid divide-by-zero
+    rs = avg_gain / avg_loss.replace(0, pd.NA)
+    rsi = 100 - (100 / (1 + rs))
+    last_val = rsi.iloc[-1]
+    return float(last_val) if pd.notna(last_val) else None
+
+
+def resolve_market_cap(ticker, last_price):
+    """Try several fallbacks — fast_info alone is frequently empty for NSE tickers."""
+    try:
+        fi = ticker.fast_info
+        mc = fi.get("market_cap")
+
+        if not mc:
+            shares = fi.get("shares")
+            if shares:
+                mc = float(shares) * last_price
+
+        if not mc:
+            info = ticker.info  # slower — only reached if the fast paths fail
+            mc = info.get("marketCap")
+
+        if mc:
+            mc = float(mc)
+            if mc >= 1e12:
+                return f"₹{mc / 1e12:.2f}L Cr"
+            if mc >= 1e7:
+                return f"₹{mc / 1e7:,.0f} Cr"
+            return f"₹{mc:,.0f}"
+    except Exception:
+        pass
+    return "N/A"
+
+
 @app.route("/api/stock-detail")
 def stock_detail():
     raw_symbol = request.args.get("symbol", "").strip().upper()
@@ -184,10 +225,6 @@ def stock_detail():
 
     try:
         ticker = yf.Ticker(yf_symbol)
-        # 1 year of daily OHLCV — used both for the chart AND for all the
-        # stat boxes below. This is far more reliable than fast_info, whose
-        # day_high/day_low/year_high/year_low/volume fields are frequently
-        # empty for NSE tickers.
         hist = ticker.history(period="1y")
 
         if hist.empty or len(hist) < 2:
@@ -207,18 +244,27 @@ def stock_detail():
         year_low = float(hist["Low"].min())
         volume = int(last_row["Volume"])
 
-        # Market cap needs shares-outstanding data that OHLCV history doesn't
-        # have — best-effort only, never let it block the rest of the response.
-        market_cap = "N/A"
-        try:
-            fi = ticker.fast_info
-            mc = fi.get("market_cap")
-            if mc:
-                market_cap = f"{float(mc):,.0f}"
-        except Exception:
-            pass
+        market_cap = resolve_market_cap(ticker, last)
 
-        # Chart only needs the last ~6 months, no need to ship the full year.
+        # ── analytics ──
+        closes = hist["Close"]
+        sma50 = float(closes.rolling(50).mean().iloc[-1]) if len(closes) >= 50 else None
+        sma200 = float(closes.rolling(200).mean().iloc[-1]) if len(closes) >= 200 else None
+        rsi = compute_rsi(closes)
+
+        if sma50 and sma200:
+            if last > sma50 and last > sma200 and sma50 > sma200:
+                trend = "Bullish"
+            elif last < sma50 and last < sma200 and sma50 < sma200:
+                trend = "Bearish"
+            else:
+                trend = "Neutral"
+        else:
+            trend = "N/A"
+
+        range_span = year_high - year_low
+        range_position = round(((last - year_low) / range_span) * 100, 1) if range_span else 50.0
+
         chart_hist = hist.tail(126)
         history = [
             {"date": idx.strftime("%Y-%m-%d"), "close": round(float(row["Close"]), 2)}
@@ -239,6 +285,13 @@ def stock_detail():
             "volume": f"{volume:,}",
             "marketCap": market_cap,
             "history": history,
+            "analytics": {
+                "sma50": f"{sma50:,.2f}" if sma50 else "N/A",
+                "sma200": f"{sma200:,.2f}" if sma200 else "N/A",
+                "rsi": f"{rsi:.1f}" if rsi is not None else "N/A",
+                "trend": trend,
+                "rangePosition": range_position,
+            },
         }
 
         _detail_cache[yf_symbol] = {"data": data, "ts": now}
