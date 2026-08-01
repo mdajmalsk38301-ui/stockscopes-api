@@ -5,3 +5,4 @@ bse
 jugaad-data
 nsetools
 yfinance
+flask-cors
