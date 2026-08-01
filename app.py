@@ -16,7 +16,11 @@ app.register_blueprint(fundamentals_bp)
 
 @app.after_request
 def add_cors_headers(response):
-    response.headers["Access-Control-Allow-Origin"] = "https://stockscopes.in"
+    # Wildcard is fine here — these endpoints are public, read-only,
+    # unauthenticated stock data with nothing user-specific to protect.
+    # No point debugging exact-origin string matches (www vs non-www,
+    # http vs https, trailing slashes) for data anyone can already see.
+    response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
     return response
 
@@ -382,4 +386,3 @@ def stock_detail():
 
 if __name__ == "__main__":
     app.run(debug=True)
-    
