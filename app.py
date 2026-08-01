@@ -6,7 +6,12 @@ import yfinance as yf
 from yfinance import EquityQuery
 import pandas as pd
 
+from candles import candles_bp
+from fundamentals import fundamentals_bp
+
 app = Flask(__name__)
+app.register_blueprint(candles_bp)
+app.register_blueprint(fundamentals_bp)
 
 
 @app.after_request
@@ -377,4 +382,4 @@ def stock_detail():
 
 if __name__ == "__main__":
     app.run(debug=True)
-        
+            
