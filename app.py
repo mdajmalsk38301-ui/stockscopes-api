@@ -14,6 +14,8 @@ from corp_actions_merge import corp_bp
 app = Flask(__name__)
 app.register_blueprint(candles_bp)
 app.register_blueprint(fundamentals_bp)
+app.register_blueprint(ipo_bp)
+app.register_blueprint(corp_bp)
 
 
 @app.after_request
