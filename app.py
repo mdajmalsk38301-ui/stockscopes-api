@@ -10,8 +10,6 @@ from candles import candles_bp
 from fundamentals import fundamentals_bp
 from ipo_merge import ipo_bp
 from corp_actions_merge import corp_bp
-app.register_blueprint(ipo_bp)
-app.register_blueprint(corp_bp)
 
 app = Flask(__name__)
 app.register_blueprint(candles_bp)
