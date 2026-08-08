@@ -3,7 +3,7 @@ import requests, csv, io
 
 ipo_bp = Blueprint('ipo_merge', __name__)
 IPOALERTS_URL = "https://ipoalerts.in/api/ipos?status=upcoming"
-SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1-lwsCkn3khtjZvT24Nz0c-gwz7dDWgh2Me2IX-1ygkA/edit?gid=0#gid=0"
+SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQp5PLGQI-7vv_DP38XBHeR5ZjawoeK_KC1Yqrw1Is26AUP6PC_l5poX8ufGpKVZSU7CTc3qM3YDs0s/pubhtml?gid=0&single=true"
 
 def fetch_ipoalerts():
     try:
