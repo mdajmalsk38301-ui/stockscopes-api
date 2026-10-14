@@ -2,6 +2,7 @@
 from flask import Blueprint, jsonify
 from datetime import datetime, timedelta
 import requests, csv, io
+from cache_util import cache_get, cache_set
 
 corp_bp = Blueprint('corp_actions_merge', __name__)
 
@@ -61,6 +62,10 @@ def fetch_sheet_actions():
 
 @corp_bp.route('/api/corp-actions/weekly', methods=['GET'])
 def merged_corp_actions():
+    cached = cache_get("corp_weekly")
+    if cached is not None:
+        return jsonify(cached)
+
     a = fetch_bse_actions()
     b = fetch_sheet_actions()
 
@@ -77,8 +82,13 @@ def merged_corp_actions():
     today = datetime.now()
     week_end = today + timedelta(days=7)
 
-    return jsonify({
+    payload = {
         "week_start": today.strftime("%Y-%m-%d"),
         "week_end": week_end.strftime("%Y-%m-%d"),
         "corp_actions": list(merged.values()),
-    })
+    }
+    # Only remember real answers (see note in ipo_merge.py).
+    if payload["corp_actions"]:
+        cache_set("corp_weekly", payload, 30 * 60)
+    return jsonify(payload)
+    
