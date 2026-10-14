@@ -5,6 +5,7 @@ import time
 import yfinance as yf
 from yfinance import EquityQuery
 import pandas as pd
+from cache_util import cache_get, cache_set
 
 from candles import candles_bp
 from fundamentals import fundamentals_bp
@@ -59,6 +60,10 @@ def home():
 
 @app.route("/ipo-data")
 def ipo_data():
+    cached = cache_get("ipo_data")
+    if cached is not None:
+        return jsonify(cached)
+
     result = []
     for status in ["open", "upcoming"]:
         try:
@@ -81,11 +86,17 @@ def ipo_data():
             time.sleep(1)
         except Exception as e:
             continue
+    if result:
+        cache_set("ipo_data", result, 15 * 60)
     return jsonify(result)
 
 
 @app.route("/corp-actions")
 def corp_actions():
+    cached = cache_get("corp_actions")
+    if cached is not None:
+        return jsonify(cached)
+
     try:
         from bse import BSE
 
@@ -115,6 +126,8 @@ def corp_actions():
                 "recDate": item.get("RD_Date", ""),
             })
 
+        if result:
+            cache_set("corp_actions", result, 30 * 60)
         return jsonify(result)
 
     except Exception as e:
