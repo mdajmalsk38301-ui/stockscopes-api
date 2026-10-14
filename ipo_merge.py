@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify
 import requests, csv, io
+from cache_util import cache_get, cache_set
 
 ipo_bp = Blueprint('ipo_merge', __name__)
 IPOALERTS_URL = "https://ipoalerts.in/api/ipos?status=upcoming"
@@ -40,6 +41,10 @@ def fetch_sheet():
 
 @ipo_bp.route('/api/ipo/merged', methods=['GET'])
 def merged_ipos():
+    cached = cache_get("ipo_merged")
+    if cached is not None:
+        return jsonify(cached)
+
     a, b = fetch_ipoalerts(), fetch_sheet()
     merged = {}
     for ipo in a:
@@ -50,5 +55,10 @@ def merged_ipos():
         key = (ipo.get('symbol') or ipo.get('company_name', '')).upper().strip()
         if key:
             merged.setdefault(key, ipo)
-    return jsonify(list(merged.values()))
-    
+    result = list(merged.values())
+    # Only remember real answers. If both sources failed we get an empty
+    # list, and we don't want to keep serving that for 15 minutes.
+    if result:
+        cache_set("ipo_merged", result, 15 * 60)
+    return jsonify(result)
+
