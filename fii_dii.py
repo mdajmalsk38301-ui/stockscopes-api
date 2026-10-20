@@ -104,3 +104,4 @@ def fii_dii():
         return jsonify({"error": str(e)}), 502
     _cache.update(t=now, data=data)
     return jsonify(data)
+    
