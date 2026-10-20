@@ -108,3 +108,4 @@ def spotlight():
     data["generated_at"] = datetime.now(IST).isoformat()
     _cache[key] = (time.time(), data)
     return jsonify(data)
+              
