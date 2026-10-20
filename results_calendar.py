@@ -112,3 +112,4 @@ def results_calendar():
         return jsonify({"error": str(e)}), 502
     _cache.update(t=now, data=data)
     return jsonify(data)
+    
