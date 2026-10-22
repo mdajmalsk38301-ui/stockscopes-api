@@ -71,7 +71,8 @@ def _fetch(symbol):
         "operating_margin_pct": _pct(info.get("operatingMargins")),
         "revenue_growth_pct": _pct(info.get("revenueGrowth")),
         "earnings_growth_pct": _pct(info.get("earningsGrowth")),
-        "debt_to_equity": _r(info.get("debtToEquity")),
+        # Yahoo reports this as a percentage: 100 means 1.0x, 1.78 means 0.0178x
+        "debt_to_equity_pct": _r(info.get("debtToEquity")),
         "week52_high": _r(info.get("fiftyTwoWeekHigh")),
         "week52_low": _r(info.get("fiftyTwoWeekLow")),
     }
@@ -108,4 +109,4 @@ def spotlight():
     data["generated_at"] = datetime.now(IST).isoformat()
     _cache[key] = (time.time(), data)
     return jsonify(data)
-              
+          
