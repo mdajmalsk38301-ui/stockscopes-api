@@ -95,26 +95,36 @@ def _nice(d):
 
 
 def _gemini(prompt):
+    """Ask Gemini for JSON. If a model is overloaded (503) or rate limited (429),
+    wait and retry, then fall back to the next model in the list."""
     key = os.environ["GEMINI_API_KEY"]
-    model = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    last = None
-    for _ in range(3):
-        try:
-            r = requests.post(
-                url, timeout=120,
-                headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                json={"contents": [{"parts": [{"text": prompt}]}],
-                      "generationConfig": {"responseMimeType": "application/json",
-                                           "temperature": 0.2}},
-            )
-            r.raise_for_status()
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            return json.loads(text)
-        except Exception as e:
-            last = e
-            time.sleep(8)
-    raise RuntimeError(f"Gemini failed: {last}")
+    primary = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    models = [primary] + [m for m in ("gemini-2.5-flash", "gemini-2.5-flash-lite") if m != primary]
+    errors = []
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        for attempt in range(2):
+            try:
+                r = requests.post(
+                    url, timeout=120,
+                    headers={"x-goog-api-key": key, "Content-Type": "application/json"},
+                    json={"contents": [{"parts": [{"text": prompt}]}],
+                          "generationConfig": {"responseMimeType": "application/json",
+                                               "temperature": 0.2}},
+                )
+                if r.status_code in (429, 500, 502, 503, 504):
+                    errors.append(f"{model} HTTP {r.status_code}")
+                    time.sleep(15 * (attempt + 1))  # busy: wait, then retry
+                    continue
+                if r.status_code != 200:
+                    errors.append(f"{model} HTTP {r.status_code}: {r.text[:100]}")
+                    break  # bad model name or key: go to the next model
+                text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                return json.loads(text)
+            except Exception as e:
+                errors.append(f"{model}: {str(e)[:80]}")
+                time.sleep(5)
+    raise RuntimeError("Gemini failed: " + " | ".join(errors)[-280:])
 
 
 def _wp(path, method="get", **kw):
@@ -396,4 +406,3 @@ def auto(job):
     # Run in background so cron-job.org gets an instant reply (its timeout is short)
     threading.Thread(target=_worker, args=(app, job), daemon=True).start()
     return jsonify(started=job), 202
-    
