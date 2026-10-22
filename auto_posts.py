@@ -5,9 +5,9 @@ Needs these files in the same repo: market_wrap.py, fii_dii.py,
 results_calendar.py, stock_spotlight.py (and your existing /api/ipo/merged
 and /api/corp-actions/weekly routes).
 
-Register in your main app:
-    from auto_posts import auto_bp
-    app.register_blueprint(auto_bp)
+Register in your main app (easiest: use register_all.py):
+    from register_all import register_all
+    register_all(app)
 
 Trigger a job (from cron-job.org):
     https://YOUR-APP.onrender.com/api/auto/market-wrap?key=YOUR_AUTO_KEY
@@ -33,7 +33,7 @@ from flask import Blueprint, jsonify, request, current_app
 from market_wrap import _build as _market
 from fii_dii import _build as _fiidii
 from results_calendar import _build as _results
-from stock_spotlight import _pick_and_build as _spot
+from stock_spotlight import _pick_and_build as _spot, NIFTY50
 
 auto_bp = Blueprint("auto_posts", __name__)
 
@@ -78,7 +78,10 @@ def _authed():
 def _internal(app, path):
     try:
         r = app.test_client().get(path)
-        return r.get_json() if r.status_code == 200 else None
+        if r.status_code != 200:
+            return None
+        # Remove NSE's "-$" suffix from company names (e.g. "Modison Ltd-$")
+        return json.loads(re.sub(r'-\$"', '"', json.dumps(r.get_json())))
     except Exception:
         return None
 
@@ -93,7 +96,7 @@ def _nice(d):
 
 def _gemini(prompt):
     key = os.environ["GEMINI_API_KEY"]
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    model = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     last = None
     for _ in range(3):
@@ -188,18 +191,37 @@ def _p_fiidii(app):
     )
 
 
+def _compact_results(d):
+    """Shrink board-meeting data into short lines so the whole week fits in the prompt.
+    Lines look like: date|SYMBOL|Company Name|NIFTY50 (the last part only for Nifty 50 members)."""
+    big = set(NIFTY50)
+
+    def line(i):
+        return f"{i['date']}|{i['symbol']}|{i['company']}" + ("|NIFTY50" if i["symbol"] in big else "")
+
+    return {
+        "today": [line(i) for i in d.get("today", [])],
+        "upcoming": [line(i) for i in d.get("upcoming", [])],
+        "recently_held": [i["company"] for i in d.get("recently_held", [])][:40],
+    }
+
+
 def _p_results(app):
     d = _results()
     if not d.get("today") and not d.get("upcoming"):
         return None
-    payload = {"today": d["today"], "upcoming": d["upcoming"], "recently_held": d["recently_held"]}
+    payload = _compact_results(d)
     return (
         "You are a market content writer for StockScopes.in.\n"
-        f"Write the quarterly results calendar post for {_nice(_today())}. Data is NSE board meeting "
-        "dates for financial results. Do not mention revenue, profit or expectations.\n\n"
-        f"DATA:\n{json.dumps(payload)[:10000]}\n\n"
-        "Structure: 1) 2-sentence intro with counts 2) Results Today table 3) Results This Week table "
-        "by date 4) Recently Held Meetings: names only, note their figures are not covered here "
+        f"Write the quarterly results calendar post for {_nice(_today())}. Data is NSE board meetings "
+        "that include financial results on the agenda. Do not mention revenue, profit or expectations.\n\n"
+        f"DATA (lines are date|symbol|company, a trailing NIFTY50 marks Nifty 50 members):\n"
+        f"{json.dumps(payload, ensure_ascii=False)[:30000]}\n\n"
+        "Structure: 1) 2-sentence intro with counts: how many companies today and how many in the coming days "
+        "2) Results Today: a table of ALL companies listed for today 3) Coming Days: first a table of the "
+        "NIFTY50-marked companies by date (date, company, symbol); then for every other company a short "
+        "comma-separated list of names under a heading for each date, plus the total count for that date "
+        "4) Recently Held Meetings: names only, note their figures are not covered here "
         "5) 1 sentence: dates can be rescheduled.\n"
         f"{RULES}\n{OUT_SPEC}"
     )
@@ -210,16 +232,17 @@ def _p_weekly(app):
     corp = _internal(app, "/api/corp-actions/weekly")
     try:
         r = _results()
-        res = {"today": r["today"], "upcoming": r["upcoming"]}
+        res = _compact_results({"today": r["today"], "upcoming": r["upcoming"]})
     except Exception:
         res = None
     parts = []
     if ipo:
         parts.append("IPO DATA:\n" + json.dumps(ipo)[:7000])
     if corp:
-        parts.append("CORPORATE ACTIONS DATA:\n" + json.dumps(corp)[:7000])
+        parts.append("CORPORATE ACTIONS DATA:\n" + json.dumps(corp)[:14000])
     if res:
-        parts.append("RESULTS BOARD MEETINGS DATA:\n" + json.dumps(res)[:6000])
+        parts.append("RESULTS BOARD MEETINGS DATA (lines are date|symbol|company, trailing NIFTY50 "
+                     "marks Nifty 50 members):\n" + json.dumps(res, ensure_ascii=False)[:30000])
     if not parts:
         return None
     mon = _today() + timedelta(days=1)
@@ -230,8 +253,9 @@ def _p_weekly(app):
         "macro events, economic data, central bank meetings or global events. Skip sections with no data.\n\n"
         + "\n\n".join(parts) +
         "\n\nStructure: 1) 2-sentence intro 2) IPOs This Week table 3) Corporate Actions This Week "
-        "table sorted by date 4) Results This Week table 5) Week at a Glance: Monday to Friday list "
-        "of only the events above 6) 1 sentence: dates can change.\n"
+        "table sorted by date 4) Results This Week: table of the NIFTY50-marked companies by date, then "
+        "per date a short comma-separated list of the other company names with the count 5) Week at a "
+        "Glance: Monday to Friday list of only the events above 6) 1 sentence: dates can change.\n"
         f"{RULES}\n{OUT_SPEC}"
     )
 
@@ -265,7 +289,9 @@ def _p_spotlight(app):
         f"DATA:\n{json.dumps(d)}\n\n"
         "Structure: 1) About the Company: 2-3 sentences paraphrasing the summary, plus sector 2) Key "
         "Numbers table: metric, value, one-line plain meaning (price, market cap in INR crore, P/E, P/B, "
-        "ROE %, margins %, growth %, debt-to-equity, 52-week range) 3) How to Read These Numbers: 3 bullets "
+        "ROE %, margins %, growth %, debt-to-equity, 52-week range). NOTE: debt_to_equity_pct is a percentage "
+        "where 100 means 1.0x, so convert it to a ratio (divide by 100) and show it as a ratio like 0.02x "
+        "3) How to Read These Numbers: 3 bullets "
         "about comparing with peers and history 4) 1 sentence: educational snapshot chosen by rotation, "
         "not a recommendation. Title must start with 'Stock Spotlight:'.\n"
         f"{RULES}\n{OUT_SPEC}"
@@ -370,3 +396,4 @@ def auto(job):
     # Run in background so cron-job.org gets an instant reply (its timeout is short)
     threading.Thread(target=_worker, args=(app, job), daemon=True).start()
     return jsonify(started=job), 202
+    
