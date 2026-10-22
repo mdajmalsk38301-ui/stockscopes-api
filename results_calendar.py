@@ -94,9 +94,9 @@ def _build():
     t = today.isoformat()
     return {
         "as_of": t,
-        "today": [i for i in items if i["date"] == t][:60],
-        "upcoming": [i for i in items if i["date"] > t][:80],
-        "recently_held": [i for i in items if i["date"] < t][:60],
+        "today": [i for i in items if i["date"] == t][:300],
+        "upcoming": [i for i in items if i["date"] > t][:600],
+        "recently_held": [i for i in items if i["date"] < t][:300],
         "generated_at": datetime.now(IST).isoformat(),
     }
 
