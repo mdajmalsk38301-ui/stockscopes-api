@@ -48,11 +48,27 @@ def _pct(v):
     return None if x is None else round(x * 100, 2)
 
 
+_why = {}  # symbol -> short reason it was skipped (shown in the status page)
+
+
 def _fetch(symbol):
-    info = yf.Ticker(f"{symbol}.NS").info or {}
+    info, err = {}, ""
+    for attempt in range(2):  # Yahoo sometimes returns an empty answer; ask again once
+        try:
+            info = yf.Ticker(f"{symbol}.NS").info or {}
+            err = ""
+        except Exception as e:
+            info, err = {}, f"{type(e).__name__}"
+        if (info.get("longName") or info.get("shortName")) and (
+                info.get("currentPrice") or info.get("regularMarketPrice")):
+            break
+        time.sleep(3)
     price = info.get("currentPrice") or info.get("regularMarketPrice")
-    if not price or not info.get("longName"):
+    name = info.get("longName") or info.get("shortName")
+    if not price or not name:
+        _why[symbol] = err or f"empty info ({len(info)} fields)"
         return None
+    info["longName"] = name
     mcap = info.get("marketCap")
     summary = (info.get("longBusinessSummary") or "")[:600]
     return {
@@ -85,13 +101,15 @@ def _pick_and_build(forced=None):
             raise RuntimeError(f"No data for {forced}")
         return d
     base = datetime.now(IST).date().toordinal()
-    # Try up to 3 consecutive stocks in the rotation in case one has no data
-    for k in range(3):
+    # Try up to 6 consecutive stocks in the rotation in case some have no data
+    tried = []
+    for k in range(6):
         sym = NIFTY50[(base + k) % len(NIFTY50)]
         d = _fetch(sym)
         if d:
             return d
-    raise RuntimeError("No usable data for today's rotation")
+        tried.append(f"{sym}: {_why.get(sym, '?')}")
+    raise RuntimeError("Yahoo gave no data for " + "; ".join(tried))
 
 
 @spotlight_bp.route("/api/stock/spotlight")
@@ -109,4 +127,4 @@ def spotlight():
     data["generated_at"] = datetime.now(IST).isoformat()
     _cache[key] = (time.time(), data)
     return jsonify(data)
-          
+                  
