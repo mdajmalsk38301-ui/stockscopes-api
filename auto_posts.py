@@ -23,6 +23,7 @@ import hmac
 import json
 import os
 import re
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone, timedelta
@@ -61,12 +62,33 @@ DISCLAIMER = (
 
 
 # ---------- helpers ----------
+# The status lives in a small file, not in memory, so every server worker sees the same
+# status (memory is separate per worker, which made the status page look empty).
+STATUS_FILE = os.path.join(tempfile.gettempdir(), "stockscopes_auto_status.json")
+
+
+def _load_status():
+    try:
+        with open(STATUS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {"recent": []}
+
+
 def _log(job, state, detail=""):
     with _lock:
-        _status[job] = {"state": state, "detail": str(detail)[:300],
-                        "time": datetime.now(IST).isoformat(timespec="seconds")}
-        _status["recent"] = ([f"{datetime.now(IST).strftime('%d %b %H:%M')} {job}: {state}"]
-                             + _status["recent"])[:20]
+        s = _load_status()
+        s[job] = {"state": state, "detail": str(detail)[:300],
+                  "time": datetime.now(IST).isoformat(timespec="seconds")}
+        s["recent"] = ([f"{datetime.now(IST).strftime('%d %b %H:%M')} {job}: {state}"]
+                       + s.get("recent", []))[:20]
+        try:
+            tmp = f"{STATUS_FILE}.{os.getpid()}"
+            with open(tmp, "w") as f:
+                json.dump(s, f)
+            os.replace(tmp, STATUS_FILE)
+        except Exception:
+            pass
 
 
 def _authed():
@@ -398,8 +420,7 @@ def auto(job):
     if not _authed():
         return jsonify(error="unauthorized"), 401
     if job == "status":
-        with _lock:
-            return jsonify(_status)
+        return jsonify(_load_status())
     if job not in JOBS and job != "telegram":
         return jsonify(error="unknown job", jobs=list(JOBS) + ["telegram"]), 404
     app = current_app._get_current_object()
