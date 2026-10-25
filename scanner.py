@@ -35,6 +35,14 @@ scanner_bp = Blueprint("scanner", __name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 CACHE_SECONDS = 10 * 60
 
+# BSE Sensex 30 (NSE symbols), as listed on 24 Oct 2026. BSE reviews the index twice a year (June and December);
+# edit this list when it changes.
+SENSEX = [
+    "RELIANCE", "BHARTIARTL", "HDFCBANK", "ICICIBANK", "TCS", "SBIN", "BAJFINANCE", "LT", "INFY", "KOTAKBANK",
+    "HINDUNILVR", "SUNPHARMA", "ADANIPORTS", "HCLTECH", "TITAN", "AXISBANK", "M&M", "MARUTI", "ULTRACEMCO", "ITC",
+    "ETERNAL", "NTPC", "BAJAJFINSV", "BEL", "POWERGRID", "ASIANPAINT", "TATASTEEL", "INDIGO", "TECHM", "TRENT",
+]
+
 # Add more NSE symbols here, for example ["ZOMATO", "IRCTC", "DMART"]
 EXTRA = []
 
@@ -44,7 +52,7 @@ _stale = {"data": None}
 
 def universe():
     seen, out = set(), []
-    for s in list(NIFTY50) + list(EXTRA):
+    for s in list(NIFTY50) + list(SENSEX) + list(EXTRA):
         s = str(s).strip().upper()
         if s and s not in seen:
             seen.add(s)
@@ -127,12 +135,14 @@ def build():
         try:
             row = scan_symbol(s, raw[t][["Close", "High", "Low", "Volume"]])
             if row:
+                row["sensex"] = s in SENSEX
+                row["nifty50"] = s in NIFTY50
                 rows.append(row)
         except Exception:
             continue
     return {
         "generated_at": datetime.now(IST).isoformat(),
-        "universe": "Nifty 50" if not EXTRA else "Nifty 50 + extra",
+        "universe": "Nifty 50 + Sensex" + (" + extra" if EXTRA else ""),
         "count": len(rows),
         "rows": rows,
     }
@@ -160,4 +170,3 @@ def scanner():
         _stale["data"] = data
         cache_set("scanner", data, CACHE_SECONDS)
         return jsonify(data)
-  
