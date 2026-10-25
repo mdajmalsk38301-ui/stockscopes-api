@@ -20,7 +20,8 @@ app.register_blueprint(corp_bp)
 
 from register_all import register_all
 register_all(app)
-
+from screener import screener_bp
+app.register_blueprint(screener_bp)
 
 @app.after_request
 def add_cors_headers(response):
