@@ -188,4 +188,3 @@ def screener():
     if time.time() - t > FRESH_SECONDS:
         _start_if_needed()            # refresh in the background, serve the saved copy meanwhile
     return jsonify(data)
-    
