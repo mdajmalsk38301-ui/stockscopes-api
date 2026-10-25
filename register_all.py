@@ -18,10 +18,18 @@ def register_all(app):
         if bp.name not in app.blueprints:
             app.register_blueprint(bp)
 
-    # The scanner is separate: if it ever has a problem, the rest of the API keeps working.
+    # The scanner and screener are separate: if it ever has a problem, the rest of the API keeps working.
     try:
         from scanner import scanner_bp
         if scanner_bp.name not in app.blueprints:
             app.register_blueprint(scanner_bp)
     except Exception as e:
         print("scanner not loaded:", e)
+
+    try:
+        from screener import screener_bp
+        if screener_bp.name not in app.blueprints:
+            app.register_blueprint(screener_bp)
+    except Exception as e:
+        print("screener not loaded:", e)
+        
