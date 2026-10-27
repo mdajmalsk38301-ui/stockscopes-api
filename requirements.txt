@@ -4,4 +4,5 @@ gunicorn
 bse
 jugaad-data
 nsetools
-yfinance
+yfinance>=0.2.66
+curl_cffi
