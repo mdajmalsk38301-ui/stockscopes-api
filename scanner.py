@@ -30,7 +30,15 @@ try:
 except Exception:  # keeps this file working on its own
     NIFTY50 = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN", "ITC", "LT", "AXISBANK", "BHARTIARTL"]
 
-scanner_bp = Blueprint("scanner", __name__)
+class _RegisterOnce(Blueprint):
+    """Registering this twice (for example once in app.py and once in register_all.py) is harmless."""
+    def register(self, app, options):
+        if self.name in app.blueprints:
+            return
+        super().register(app, options)
+
+
+scanner_bp = _RegisterOnce("scanner", __name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 CACHE_SECONDS = 10 * 60
@@ -225,4 +233,3 @@ def scanner():
         _stale["data"] = data
         cache_set("scanner", data, CACHE_SECONDS)
         return jsonify(data)
-      
