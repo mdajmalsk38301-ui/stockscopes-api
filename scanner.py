@@ -43,6 +43,60 @@ SENSEX = [
     "ETERNAL", "NTPC", "BAJAJFINSV", "BEL", "POWERGRID", "ASIANPAINT", "TATASTEEL", "INDIGO", "TECHM", "TRENT",
 ]
 
+# Company names shown on the website. A symbol that is not listed here is shown as its symbol.
+NAMES = {
+    "RELIANCE": "Reliance Industries",
+    "TCS": "Tata Consultancy Services",
+    "HDFCBANK": "HDFC Bank",
+    "INFY": "Infosys",
+    "ICICIBANK": "ICICI Bank",
+    "BHARTIARTL": "Bharti Airtel",
+    "SBIN": "State Bank of India",
+    "ITC": "ITC",
+    "LT": "Larsen & Toubro",
+    "HINDUNILVR": "Hindustan Unilever",
+    "KOTAKBANK": "Kotak Mahindra Bank",
+    "AXISBANK": "Axis Bank",
+    "BAJFINANCE": "Bajaj Finance",
+    "BAJAJFINSV": "Bajaj Finserv",
+    "MARUTI": "Maruti Suzuki",
+    "M&M": "Mahindra & Mahindra",
+    "SUNPHARMA": "Sun Pharma",
+    "TITAN": "Titan Company",
+    "ULTRACEMCO": "UltraTech Cement",
+    "NTPC": "NTPC",
+    "POWERGRID": "Power Grid Corporation",
+    "ASIANPAINT": "Asian Paints",
+    "HCLTECH": "HCL Technologies",
+    "TECHM": "Tech Mahindra",
+    "WIPRO": "Wipro",
+    "TATASTEEL": "Tata Steel",
+    "ADANIENT": "Adani Enterprises",
+    "ADANIPORTS": "Adani Ports & SEZ",
+    "APOLLOHOSP": "Apollo Hospitals",
+    "BAJAJ-AUTO": "Bajaj Auto",
+    "BEL": "Bharat Electronics",
+    "CIPLA": "Cipla",
+    "COALINDIA": "Coal India",
+    "DRREDDY": "Dr Reddy's Laboratories",
+    "EICHERMOT": "Eicher Motors",
+    "ETERNAL": "Eternal (Zomato)",
+    "GRASIM": "Grasim Industries",
+    "HDFCLIFE": "HDFC Life Insurance",
+    "HEROMOTOCO": "Hero MotoCorp",
+    "HINDALCO": "Hindalco Industries",
+    "INDUSINDBK": "IndusInd Bank",
+    "JIOFIN": "Jio Financial Services",
+    "JSWSTEEL": "JSW Steel",
+    "NESTLEIND": "Nestle India",
+    "ONGC": "ONGC",
+    "SBILIFE": "SBI Life Insurance",
+    "SHRIRAMFIN": "Shriram Finance",
+    "TATACONSUMER": "Tata Consumer Products",
+    "TRENT": "Trent",
+    "INDIGO": "InterGlobe Aviation (IndiGo)"
+}
+
 # Add more NSE symbols here, for example ["ZOMATO", "IRCTC", "DMART"]
 EXTRA = []
 
@@ -135,6 +189,7 @@ def build():
         try:
             row = scan_symbol(s, raw[t][["Close", "High", "Low", "Volume"]])
             if row:
+                row["name"] = NAMES.get(s, s)
                 row["sensex"] = s in SENSEX
                 row["nifty50"] = s in NIFTY50
                 rows.append(row)
@@ -170,3 +225,4 @@ def scanner():
         _stale["data"] = data
         cache_set("scanner", data, CACHE_SECONDS)
         return jsonify(data)
+      
