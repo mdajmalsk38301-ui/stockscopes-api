@@ -29,7 +29,15 @@ try:
 except Exception:
     NIFTY50 = ["RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN", "ITC", "LT", "AXISBANK", "BHARTIARTL"]
 
-screener_bp = Blueprint("screener", __name__)
+class _RegisterOnce(Blueprint):
+    """Registering this twice (for example once in app.py and once in register_all.py) is harmless."""
+    def register(self, app, options):
+        if self.name in app.blueprints:
+            return
+        super().register(app, options)
+
+
+screener_bp = _RegisterOnce("screener", __name__)
 
 IST = timezone(timedelta(hours=5, minutes=30))
 FRESH_SECONDS = 12 * 3600
