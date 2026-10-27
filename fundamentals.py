@@ -198,14 +198,20 @@ def get_fundamentals():
     if cached is not None:
         return jsonify(cached)
 
+    ticker = yf.Ticker(yahoo_symbol)
+    # The company-details call (.info) is the one Yahoo blocks most often. If it fails we carry on:
+    # the financial statements use a different Yahoo call and often still work.
     try:
-        ticker = yf.Ticker(yahoo_symbol)
         info = ticker.info or {}
-    except Exception as exc:
-        return jsonify({"error": f"failed to fetch data for {yahoo_symbol}: {exc}"}), 502
-
-    if not info or info.get("regularMarketPrice") is None and info.get("currentPrice") is None:
-        return jsonify({"error": f"no data returned for {yahoo_symbol}"}), 502
+    except Exception:
+        info = {}
+    if not info:
+        try:
+            fi = ticker.fast_info
+            info = {"currentPrice": fi.get("lastPrice"), "marketCap": fi.get("marketCap"),
+                    "fiftyTwoWeekHigh": fi.get("yearHigh"), "fiftyTwoWeekLow": fi.get("yearLow")}
+        except Exception:
+            info = {}
 
     stats = {
         "market_cap":      info.get("marketCap"),
@@ -244,6 +250,11 @@ def get_fundamentals():
             statements["quarterly"][key] = _extract_statement(getattr(ticker, quarterly_attr), item_defs)
         except Exception:
             statements["quarterly"][key] = []
+
+    has_stmt = any(statements[p].get(k) for p in statements for k in statements[p])
+    has_info = any(v is not None for v in stats.values()) or company["name"]
+    if not has_stmt and not has_info:
+        return jsonify({"error": f"no data returned for {yahoo_symbol}"}), 502
 
     payload = {
         "symbol": yahoo_symbol,
