@@ -110,7 +110,7 @@ def parse_info(symbol, info):
 
 
 def _one(symbol):
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             row = parse_info(symbol, yf.Ticker(symbol + ".NS").info)
             if row:
@@ -118,13 +118,14 @@ def _one(symbol):
                 row["nifty50"] = symbol in NIFTY50
                 return row
         except Exception:
-            time.sleep(1.5)
+            pass
+        time.sleep(2 + attempt * 3)          # wait longer each time, so Yahoo is not hammered
     return None
 
 
 def build():
     syms = universe()
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=2) as ex:
         rows = [r for r in ex.map(_one, syms) if r]
     return {
         "generated_at": datetime.now(IST).isoformat(),
@@ -188,3 +189,4 @@ def screener():
     if time.time() - t > FRESH_SECONDS:
         _start_if_needed()            # refresh in the background, serve the saved copy meanwhile
     return jsonify(data)
+    
