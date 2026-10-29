@@ -241,15 +241,23 @@ def get_fundamentals():
         ("balance_sheet",    "balance_sheet",          "quarterly_balance_sheet", BALANCE_SHEET_ITEMS),
         ("cash_flow",        "cashflow",               "quarterly_cashflow",     CASH_FLOW_ITEMS),
     ]
+
+    def _grab(job):
+        period, key, attr, item_defs = job
+        try:
+            return period, key, _extract_statement(getattr(ticker, attr), item_defs)
+        except Exception:
+            return period, key, []
+
+    jobs = []
     for key, annual_attr, quarterly_attr, item_defs in fetchers:
-        try:
-            statements["annual"][key] = _extract_statement(getattr(ticker, annual_attr), item_defs)
-        except Exception:
-            statements["annual"][key] = []
-        try:
-            statements["quarterly"][key] = _extract_statement(getattr(ticker, quarterly_attr), item_defs)
-        except Exception:
-            statements["quarterly"][key] = []
+        jobs.append(("annual", key, annual_attr, item_defs))
+        jobs.append(("quarterly", key, quarterly_attr, item_defs))
+    # Six separate Yahoo calls: run them side by side so the page does not wait for all six one after another.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        for period, key, rows in ex.map(_grab, jobs):
+            statements[period][key] = rows
 
     has_stmt = any(statements[p].get(k) for p in statements for k in statements[p])
     has_info = any(v is not None for v in stats.values()) or company["name"]
@@ -264,3 +272,4 @@ def get_fundamentals():
     }
     _cache_set(yahoo_symbol, payload)
     return jsonify(payload)
+   
