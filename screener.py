@@ -117,10 +117,119 @@ def parse_info(symbol, info):
     }
 
 
+# Used only when Yahoo refuses the company-details call (.info). Sectors are fixed here because that call also carries them.
+SECTORS = {
+    "RELIANCE": "Energy", "ONGC": "Energy", "COALINDIA": "Energy", "BPCL": "Energy", "NTPC": "Utilities", "POWERGRID": "Utilities",
+    "TCS": "Technology", "INFY": "Technology", "HCLTECH": "Technology", "WIPRO": "Technology", "TECHM": "Technology", "LTIM": "Technology",
+    "HDFCBANK": "Financial Services", "ICICIBANK": "Financial Services", "SBIN": "Financial Services", "AXISBANK": "Financial Services",
+    "KOTAKBANK": "Financial Services", "INDUSINDBK": "Financial Services", "BAJFINANCE": "Financial Services", "BAJAJFINSV": "Financial Services",
+    "SBILIFE": "Financial Services", "HDFCLIFE": "Financial Services", "SHRIRAMFIN": "Financial Services", "JIOFIN": "Financial Services",
+    "HINDUNILVR": "Consumer Defensive", "ITC": "Consumer Defensive", "NESTLEIND": "Consumer Defensive", "BRITANNIA": "Consumer Defensive", "TATACONSUM": "Consumer Defensive",
+    "MARUTI": "Consumer Cyclical", "M&M": "Consumer Cyclical", "TATAMOTORS": "Consumer Cyclical", "BAJAJ-AUTO": "Consumer Cyclical", "EICHERMOT": "Consumer Cyclical",
+    "HEROMOTOCO": "Consumer Cyclical", "TITAN": "Consumer Cyclical", "TRENT": "Consumer Cyclical", "ETERNAL": "Consumer Cyclical", "INDIGO": "Industrials",
+    "LT": "Industrials", "ADANIPORTS": "Industrials", "BEL": "Industrials", "ADANIENT": "Industrials",
+    "SUNPHARMA": "Healthcare", "CIPLA": "Healthcare", "DRREDDY": "Healthcare", "APOLLOHOSP": "Healthcare", "DIVISLAB": "Healthcare",
+    "ULTRACEMCO": "Basic Materials", "GRASIM": "Basic Materials", "TATASTEEL": "Basic Materials", "JSWSTEEL": "Basic Materials", "HINDALCO": "Basic Materials", "ASIANPAINT": "Basic Materials",
+    "BHARTIARTL": "Communication Services",
+}
+
+
+try:
+    from scanner import NAMES as _NAMES
+except Exception:
+    _NAMES = {}
+
+
+def _series(df, names):
+    """Values of the first matching row of a yfinance statement table, newest first."""
+    if df is None or getattr(df, "empty", True):
+        return []
+    for n in names:
+        if n in df.index:
+            out = []
+            for v in df.loc[n].tolist():
+                f = _num(v)
+                out.append(f)
+            return out
+    return []
+
+
+def parse_fallback(symbol, price, mcap, income, balance, dividends_12m):
+    """Work out the screener numbers from price plus financial statements (no Yahoo .info needed)."""
+    if not price:
+        return None
+    rev = _series(income, ["Total Revenue", "Operating Revenue"])
+    ni = _series(income, ["Net Income", "Net Income Common Stockholders"])
+    eps = _series(income, ["Diluted EPS", "Basic EPS"])
+    equity = _series(balance, ["Stockholders Equity", "Common Stock Equity", "Total Equity Gross Minority Interest"])
+    debt = _series(balance, ["Total Debt"])
+    first = lambda a: a[0] if a and a[0] is not None else None
+    e0, n0, r0, eq0, d0 = first(eps), first(ni), first(rev), first(equity), first(debt)
+    ratio = lambda a, b: round(a / b, 2) if a is not None and b else None
+    growth = None
+    if len(rev) > 1 and rev[0] is not None and rev[1]:
+        growth = round((rev[0] / rev[1] - 1) * 100, 2)
+    return {
+        "symbol": symbol,
+        "name": _NAMES.get(symbol, symbol),
+        "sector": SECTORS.get(symbol, "Other"),
+        "price": round(price, 2),
+        "market_cap_cr": round(mcap / 1e7, 0) if mcap else None,
+        "pe": round(price / e0, 2) if e0 and e0 > 0 else None,
+        "pb": ratio(mcap, eq0) if mcap and eq0 and eq0 > 0 else None,
+        "roe": round(n0 / eq0 * 100, 2) if n0 is not None and eq0 and eq0 > 0 else None,
+        "debt_equity": ratio(d0, eq0) if d0 is not None and eq0 and eq0 > 0 else None,
+        "div_yield": round(dividends_12m / price * 100, 2) if dividends_12m else 0.0,
+        "profit_margin": round(n0 / r0 * 100, 2) if n0 is not None and r0 else None,
+        "rev_growth": growth,
+        "eps": round(e0, 2) if e0 is not None else None,
+        "beta": None,
+    }
+
+
+def _fallback_row(symbol):
+    t = yf.Ticker(symbol + ".NS")
+    fi = t.fast_info
+    price = _num(fi["lastPrice"]); mcap = _num(fi["marketCap"])
+    try:
+        income = t.income_stmt
+    except Exception:
+        income = None
+    try:
+        balance = t.balance_sheet
+    except Exception:
+        balance = None
+    div = 0.0
+    try:
+        d = t.dividends
+        if d is not None and len(d):
+            cutoff = d.index.max() - timedelta(days=365)
+            div = float(d[d.index > cutoff].sum())
+    except Exception:
+        pass
+    row = parse_fallback(symbol, price, mcap, income, balance, div)
+    if row and not any(row[k] is not None for k in ("pe", "roe", "profit_margin", "rev_growth", "debt_equity")):
+        return None                                   # a price and nothing else is not worth listing
+    return row
+
+
+def _fetch_row(symbol):
+    try:
+        row = parse_info(symbol, yf.Ticker(symbol + ".NS").info)
+        if row:
+            return row
+    except Exception:
+        pass
+    try:
+        return _fallback_row(symbol)
+    except Exception:
+        return None
+
+
 def _one(symbol):
     for attempt in range(3):
         try:
-            row = parse_info(symbol, yf.Ticker(symbol + ".NS").info)
+            row = _fetch_row(symbol)
             if row:
                 row["sensex"] = symbol in SENSEX
                 row["nifty50"] = symbol in NIFTY50
@@ -131,10 +240,33 @@ def _one(symbol):
     return None
 
 
+def _probe(symbols):
+    """Try a few stocks once. If Yahoo refuses all of them there is no point trying the other 40."""
+    for sym in symbols:
+        try:
+            if _fetch_row(sym):
+                return True
+        except Exception:
+            pass
+        time.sleep(1)
+    return False
+
+
 def build():
     syms = universe()
+    if not _probe(syms[:3]):
+        return {"generated_at": datetime.now(IST).isoformat(), "count": 0, "rows": []}
+    fails = {"n": 0}
+
+    def work(sym):
+        if fails["n"] >= 6:                       # Yahoo has started refusing: stop asking, keep what we have
+            return None
+        row = _one(sym)
+        fails["n"] = 0 if row else fails["n"] + 1
+        return row
+
     with ThreadPoolExecutor(max_workers=2) as ex:
-        rows = [r for r in ex.map(_one, syms) if r]
+        rows = [r for r in ex.map(work, syms) if r]
     return {
         "generated_at": datetime.now(IST).isoformat(),
         "universe": "Nifty 50 + Sensex" + (" + extra" if EXTRA else ""),
@@ -172,12 +304,15 @@ def _worker():
     finally:
         with _lock:
             _state["building"] = False
+            _state["last_try"] = time.time()
 
 
 def _start_if_needed():
     with _lock:
         if _state["building"]:
             return
+        if _state["data"] is None and time.time() - _state.get("last_try", 0) < 21600:
+            return                    # the last try found nothing; wait 6 hours before asking Yahoo again
         _state["building"] = True
     threading.Thread(target=_worker, daemon=True).start()
 
@@ -197,4 +332,3 @@ def screener():
     if time.time() - t > FRESH_SECONDS:
         _start_if_needed()            # refresh in the background, serve the saved copy meanwhile
     return jsonify(data)
-    
