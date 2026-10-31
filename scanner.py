@@ -112,6 +112,10 @@ _lock = threading.Lock()
 _stale = {"data": None}
 
 
+# Yahoo uses a shorter code for a few companies. The log showed "TATACONSUMER.NS: No data found".
+YAHOO_CODE = {"TATACONSUMER": "TATACONSUM"}
+
+
 def universe():
     seen, out = set(), []
     for s in list(NIFTY50) + list(SENSEX) + list(EXTRA):
@@ -189,7 +193,7 @@ def scan_symbol(symbol, df):
 
 def build():
     syms = universe()
-    tickers = [s + ".NS" for s in syms]
+    tickers = [YAHOO_CODE.get(s, s) + ".NS" for s in syms]
     raw = yf.download(tickers, period="1y", interval="1d", group_by="ticker",
                       progress=False, threads=True, auto_adjust=False, timeout=25)
     rows = []
@@ -233,3 +237,4 @@ def scanner():
         _stale["data"] = data
         cache_set("scanner", data, CACHE_SECONDS)
         return jsonify(data)
+      
