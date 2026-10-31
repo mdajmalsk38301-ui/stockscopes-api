@@ -56,6 +56,9 @@ _state = {"data": None, "t": 0, "building": False}
 _lock = threading.Lock()
 
 
+YAHOO_CODE = {"TATACONSUMER": "TATACONSUM"}      # Yahoo uses the shorter code
+
+
 def universe():
     seen, out = set(), []
     for s in list(NIFTY50) + list(SENSEX) + list(EXTRA):
@@ -188,7 +191,7 @@ def parse_fallback(symbol, price, mcap, income, balance, dividends_12m):
 
 
 def _fallback_row(symbol):
-    t = yf.Ticker(symbol + ".NS")
+    t = yf.Ticker(YAHOO_CODE.get(symbol, symbol) + ".NS")
     fi = t.fast_info
     price = _num(fi["lastPrice"]); mcap = _num(fi["marketCap"])
     try:
@@ -215,7 +218,7 @@ def _fallback_row(symbol):
 
 def _fetch_row(symbol):
     try:
-        row = parse_info(symbol, yf.Ticker(symbol + ".NS").info)
+        row = parse_info(symbol, yf.Ticker(YAHOO_CODE.get(symbol, symbol) + ".NS").info)
         if row:
             return row
     except Exception:
