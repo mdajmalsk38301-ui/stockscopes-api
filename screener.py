@@ -6,13 +6,13 @@ One row per stock with valuation and quality numbers (market cap, P/E, P/B,
 ROE, debt to equity, dividend yield, margins, growth). The website page does
 the filtering; this file collects the numbers and remembers them.
 
-Collecting about 50 stocks from Yahoo takes 1 to 2 minutes, so it runs in the
+Collecting stocks from Yahoo takes a few minutes, so it runs in the
 background. While it runs, /api/screener answers 503 {"building": true}. Once
 ready, the answer is kept for 12 hours (and saved in a file, so a restart of the
 app does not start from zero).
 
 Add to your repo: this file next to app.py, plus the updated register_all.py.
-To scan more stocks, add NSE symbols to EXTRA (keep it under about 100).
+To scan more stocks, add lines to extra_universe.py. About 190 stocks take 5 to 8 minutes, in the background.
 """
 import json
 import os
@@ -42,7 +42,11 @@ screener_bp = _RegisterOnce("screener", __name__)
 IST = timezone(timedelta(hours=5, minutes=30))
 FRESH_SECONDS = 12 * 3600
 CACHE_FILE = os.path.join(os.environ.get("TMPDIR", "/tmp"), "stockscopes_screener.json")
-EXTRA = []
+try:
+    from extra_universe import EXTRA_STOCKS
+except Exception:
+    EXTRA_STOCKS = {}
+EXTRA = list(EXTRA_STOCKS)
 
 # BSE Sensex 30 (NSE symbols), as listed on 24 Oct 2026. BSE reviews the index twice a year (June and December);
 # edit this list when it changes.
@@ -136,6 +140,9 @@ SECTORS = {
     "BHARTIARTL": "Communication Services",
 }
 
+
+for _s, (_n, _sec) in EXTRA_STOCKS.items():
+    SECTORS.setdefault(_s, _sec)
 
 try:
     from scanner import NAMES as _NAMES
@@ -262,7 +269,7 @@ def build():
     fails = {"n": 0}
 
     def work(sym):
-        if fails["n"] >= 6:                       # Yahoo has started refusing: stop asking, keep what we have
+        if fails["n"] >= 12:                       # Yahoo has started refusing: stop asking, keep what we have
             return None
         row = _one(sym)
         fails["n"] = 0 if row else fails["n"] + 1
@@ -331,7 +338,7 @@ def screener():
                 _state.update(data=data, t=t)
     if data is None:
         _start_if_needed()
-        return jsonify({"building": True, "message": "Collecting company numbers. Try again in 2 minutes."}), 503
+        return jsonify({"building": True, "message": "Collecting company numbers. Try again in a few minutes."}), 503
     if time.time() - t > FRESH_SECONDS:
         _start_if_needed()            # refresh in the background, serve the saved copy meanwhile
     return jsonify(data)

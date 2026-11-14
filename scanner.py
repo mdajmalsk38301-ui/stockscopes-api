@@ -12,8 +12,8 @@ Add to your repo:
   2. Replace register_all.py with the one in this folder (or add scanner_bp to it).
   3. Commit. Render redeploys by itself.
 
-To scan more stocks, add symbols to EXTRA below (NSE symbols without .NS).
-Keep the list under about 150 symbols so Render's free plan does not time out.
+To scan more stocks, add lines to extra_universe.py (NSE symbols without .NS).
+The download runs in batches and refreshes in the background, so a few hundred stocks are fine.
 """
 import time
 import threading
@@ -105,8 +105,14 @@ NAMES = {
     "INDIGO": "InterGlobe Aviation (IndiGo)"
 }
 
-# Add more NSE symbols here, for example ["ZOMATO", "IRCTC", "DMART"]
-EXTRA = []
+# More stocks live in extra_universe.py (about 140 beyond Nifty 50 and Sensex).
+try:
+    from extra_universe import EXTRA_STOCKS
+except Exception:
+    EXTRA_STOCKS = {}
+EXTRA = list(EXTRA_STOCKS)
+for _s, (_n, _sec) in EXTRA_STOCKS.items():
+    NAMES.setdefault(_s, _n)
 
 _lock = threading.Lock()
 _stale = {"data": None}
@@ -191,12 +197,14 @@ def scan_symbol(symbol, df):
     }
 
 
-def build():
-    syms = universe()
+def _scan_batch(syms):
     tickers = [YAHOO_CODE.get(s, s) + ".NS" for s in syms]
-    raw = yf.download(tickers, period="1y", interval="1d", group_by="ticker",
-                      progress=False, threads=True, auto_adjust=False, timeout=25)
     rows = []
+    try:
+        raw = yf.download(tickers, period="1y", interval="1d", group_by="ticker",
+                          progress=False, threads=True, auto_adjust=False, timeout=30)
+    except Exception:
+        return rows
     for s, t in zip(syms, tickers):
         try:
             row = scan_symbol(s, raw[t][["Close", "High", "Low", "Volume"]])
@@ -207,6 +215,14 @@ def build():
                 rows.append(row)
         except Exception:
             continue
+    return rows
+
+
+def build():
+    syms = universe()
+    rows = []
+    for i in range(0, len(syms), 40):                # batches of 40 keep each download small
+        rows.extend(_scan_batch(syms[i:i + 40]))
     return {
         "generated_at": datetime.now(IST).isoformat(),
         "universe": "Nifty 50 + Sensex" + (" + extra" if EXTRA else ""),
@@ -215,26 +231,45 @@ def build():
     }
 
 
+_busy = {"on": False}
+
+
+def _refresh():
+    try:
+        data = build()
+        if data["rows"]:
+            _stale["data"] = data
+            cache_set("scanner", data, CACHE_SECONDS)
+    except Exception:
+        pass
+    finally:
+        _busy["on"] = False
+
+
+def _refresh_in_background():
+    with _lock:
+        if _busy["on"]:
+            return
+        _busy["on"] = True
+    threading.Thread(target=_refresh, daemon=True).start()
+
+
+_refresh_in_background()                              # warm up when the app starts, so the first visitor is not kept waiting
+
+
 @scanner_bp.route("/api/scanner")
 def scanner():
     saved = cache_get("scanner")
     if saved is not None:
         return jsonify(saved)
-    with _lock:                       # one rebuild at a time
-        saved = cache_get("scanner")
-        if saved is not None:
-            return jsonify(saved)
-        try:
-            data = build()
-        except Exception as e:
-            if _stale["data"]:
-                return jsonify(_stale["data"])
-            return jsonify({"error": str(e)}), 502
-        if not data["rows"]:
-            if _stale["data"]:
-                return jsonify(_stale["data"])
-            return jsonify({"error": "no data from the market data source"}), 502
-        _stale["data"] = data
-        cache_set("scanner", data, CACHE_SECONDS)
-        return jsonify(data)
-      
+    if _stale["data"]:                                # serve the last good copy now, rebuild quietly
+        _refresh_in_background()
+        return jsonify(_stale["data"])
+    if _busy["on"]:
+        return jsonify({"building": True, "message": "Collecting prices. Try again in a minute."}), 503
+    with _lock:
+        _busy["on"] = True
+    _refresh()
+    if _stale["data"]:
+        return jsonify(_stale["data"])
+    return jsonify({"error": "no data from the market data source"}), 502
