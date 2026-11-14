@@ -265,6 +265,7 @@ def _probe(symbols):
 def build():
     syms = universe()
     if not _probe(syms[:3]):
+        print("screener: Yahoo refused the company-details calls, so no ratios this time (will retry in 6 hours)", flush=True)
         return {"generated_at": datetime.now(IST).isoformat(), "count": 0, "rows": []}
     fails = {"n": 0}
 
@@ -277,6 +278,7 @@ def build():
 
     with ThreadPoolExecutor(max_workers=2) as ex:
         rows = [r for r in ex.map(work, syms) if r]
+    print("screener: collected %d of %d stocks" % (len(rows), len(syms)), flush=True)
     return {
         "generated_at": datetime.now(IST).isoformat(),
         "universe": "Nifty 50 + Sensex" + (" + extra" if EXTRA else ""),

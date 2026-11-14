@@ -218,17 +218,32 @@ def _scan_batch(syms):
     return rows
 
 
-def build():
-    syms = universe()
-    rows = []
-    for i in range(0, len(syms), 40):                # batches of 40 keep each download small
-        rows.extend(_scan_batch(syms[i:i + 40]))
-    return {
+def _publish(rows, partial):
+    """Make what we have so far available straight away, so the website never waits for the whole list."""
+    data = {
         "generated_at": datetime.now(IST).isoformat(),
         "universe": "Nifty 50 + Sensex" + (" + extra" if EXTRA else ""),
         "count": len(rows),
-        "rows": rows,
+        "partial": partial,
+        "rows": list(rows),
     }
+    _stale["data"] = data
+    cache_set("scanner", data, 90 if partial else CACHE_SECONDS)
+    return data
+
+
+def build():
+    syms = universe()
+    rows = []
+    t0 = time.time()
+    for i in range(0, len(syms), 25):                # small batches: results show up early and one slow batch cannot hold up the rest
+        got = _scan_batch(syms[i:i + 25])
+        rows.extend(got)
+        print("scanner: batch %d-%d gave %d rows (%d so far, %ds)" % (i, i + 25, len(got), len(rows), time.time() - t0), flush=True)
+        if rows and i + 25 < len(syms):
+            _publish(rows, True)
+        time.sleep(1)
+    return _publish(rows, False) if rows else {"rows": []}
 
 
 _busy = {"on": False}
@@ -236,12 +251,9 @@ _busy = {"on": False}
 
 def _refresh():
     try:
-        data = build()
-        if data["rows"]:
-            _stale["data"] = data
-            cache_set("scanner", data, CACHE_SECONDS)
-    except Exception:
-        pass
+        build()
+    except Exception as e:
+        print("scanner: build failed:", e, flush=True)
     finally:
         _busy["on"] = False
 
