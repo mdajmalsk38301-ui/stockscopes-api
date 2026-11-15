@@ -296,3 +296,4 @@ def scanner():
     if _stale["data"]:
         return jsonify(_stale["data"])
     return jsonify({"error": "no data from the market data source"}), 502
+      
