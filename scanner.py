@@ -111,7 +111,7 @@ try:
     from extra_universe import EXTRA_STOCKS
 except Exception:
     EXTRA_STOCKS = {}
-EXTRA = []                                        # classic: Nifty 50 + Sensex only
+EXTRA = list(EXTRA_STOCKS)
 for _s, (_n, _sec) in EXTRA_STOCKS.items():
     NAMES.setdefault(_s, _n)
 
@@ -128,6 +128,28 @@ def _note(msg):
 
 # Yahoo uses a shorter code for a few companies. The log showed "TATACONSUMER.NS: No data found".
 YAHOO_CODE = {"TATACONSUMER": "TATACONSUM", "INFOEDGE": "NAUKRI"}
+
+
+def core_universe():
+    """Nifty 50 + Sensex: scanned in one go while the request waits, exactly as in the older, reliable version."""
+    seen, out = set(), []
+    for s in list(NIFTY50) + list(SENSEX):
+        s = str(s).strip().upper()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def extra_universe():
+    core = set(core_universe())
+    seen, out = set(), []
+    for s in EXTRA:
+        s = str(s).strip().upper()
+        if s and s not in core and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
 
 
 def universe():
@@ -205,8 +227,52 @@ def scan_symbol(symbol, df):
     }
 
 
-def build():
-    syms = universe()
+def _scan_batch(syms):
+    tickers = [YAHOO_CODE.get(s, s) + ".NS" for s in syms]
+    rows = []
+    raw = None
+    for attempt in (1, 2):                            # one quiet retry: Yahoo sometimes throttles for a few seconds
+        try:
+            raw = yf.download(tickers, period="1y", interval="1d", group_by="ticker",
+                              progress=False, threads=True, auto_adjust=False, timeout=30)
+            if raw is not None and len(raw) > 0:
+                break
+            _note("batch empty on try %d" % attempt)
+        except Exception as e:
+            _note("batch failed on try %d: %s" % (attempt, str(e)[:120]))
+            raw = None
+        time.sleep(6)
+    if raw is None or len(raw) == 0:
+        return rows
+    for s, t in zip(syms, tickers):
+        try:
+            row = scan_symbol(s, raw[t][["Close", "High", "Low", "Volume"]])
+            if row:
+                row["name"] = NAMES.get(s, s)
+                row["sensex"] = s in SENSEX
+                row["nifty50"] = s in NIFTY50
+                rows.append(row)
+        except Exception:
+            continue
+    return rows
+
+
+def _publish(rows, partial):
+    """Make what we have so far available straight away, so the website never waits for the whole list."""
+    data = {
+        "generated_at": datetime.now(IST).isoformat(),
+        "universe": "Nifty 50 + Sensex" + (" + extra" if EXTRA else ""),
+        "count": len(rows),
+        "partial": partial,
+        "rows": list(rows),
+    }
+    _stale["data"] = data
+    cache_set("scanner", data, 90 if partial else CACHE_SECONDS)
+    return data
+
+
+def build_core():
+    syms = core_universe()
     tickers = [YAHOO_CODE.get(s, s) + ".NS" for s in syms]
     raw = yf.download(tickers, period="1y", interval="1d", group_by="ticker",
                       progress=False, threads=True, auto_adjust=False, timeout=25)
@@ -221,12 +287,43 @@ def build():
                 rows.append(row)
         except Exception:
             continue
-    return {
-        "generated_at": datetime.now(IST).isoformat(),
-        "universe": "Nifty 50 + Sensex",
-        "count": len(rows),
-        "rows": rows,
-    }
+    return rows
+
+
+_busy = {"on": False}
+
+
+def _extend(core_rows):
+    """Runs in the background after the core list is out: adds the extra stocks in batches of 25."""
+    try:
+        rows = list(core_rows)
+        extra = extra_universe()
+        for i in range(0, len(extra), 25):
+            got = _scan_batch(extra[i:i + 25])
+            rows.extend(got)
+            _note("extra %d-%d gave %d rows (%d in total)" % (i, i + 25, len(got), len(rows)))
+            _publish(rows, i + 25 < len(extra))
+            time.sleep(1)
+    except Exception as e:
+        _note("extra stocks stopped: %s" % str(e)[:120])
+    finally:
+        _busy["on"] = False
+
+
+def _start_extend(core_rows):
+    if not EXTRA:
+        return
+    with _lock:
+        if _busy["on"]:
+            return
+        _busy["on"] = True
+    threading.Thread(target=_extend, args=(core_rows,), daemon=True).start()
+
+
+@scanner_bp.route("/api/scanner-status")
+def scanner_status():
+    d = _stale["data"]
+    return jsonify({"busy": _busy["on"], "rows_now": (d or {}).get("count", 0), "partial": (d or {}).get("partial"), "log": list(_log)})
 
 
 @scanner_bp.route("/api/scanner")
@@ -234,20 +331,22 @@ def scanner():
     saved = cache_get("scanner")
     if saved is not None:
         return jsonify(saved)
+    if _busy["on"] and _stale["data"]:               # the extra stocks are still being added: show what we have
+        return jsonify(_stale["data"])
     with _lock:
         saved = cache_get("scanner")
         if saved is not None:
             return jsonify(saved)
         try:
-            data = build()
+            rows = build_core()
         except Exception as e:
-            if _stale["data"]:
-                return jsonify(_stale["data"])
-            return jsonify({"error": "no data from the market data source", "detail": str(e)[:120]}), 502
-        if not data["rows"]:
+            _note("core build failed: %s" % str(e)[:120])
+            rows = []
+        if not rows:
             if _stale["data"]:
                 return jsonify(_stale["data"])
             return jsonify({"error": "no data from the market data source"}), 502
-        _stale["data"] = data
-        cache_set("scanner", data, CACHE_SECONDS)
-        return jsonify(data)
+        data = _publish(rows, bool(EXTRA))
+        _note("core list ready: %d rows" % len(rows))
+    _start_extend(rows)
+    return jsonify(data)
