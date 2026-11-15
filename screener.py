@@ -287,6 +287,14 @@ def build(publish=None):
     if saved:
         return saved
     syms = universe()
+    try:                                              # let the price scanner finish first, so the two do not fight over Yahoo
+        import scanner as _sc
+        for _ in range(60):
+            if not _sc._busy["on"]:
+                break
+            time.sleep(3)
+    except Exception:
+        pass
     if not _probe(syms[:3]):
         print("screener: Yahoo refused the company-details calls, so no ratios this time (will retry in 6 hours)", flush=True)
         return {"generated_at": datetime.now(IST).isoformat(), "count": 0, "rows": []}
@@ -300,7 +308,7 @@ def build(publish=None):
         return row
 
     rows, t0 = [], time.time()
-    with ThreadPoolExecutor(max_workers=3) as ex:
+    with ThreadPoolExecutor(max_workers=2) as ex:
         for i in range(0, len(syms), 20):         # chunks of 20: the website can show the first ones within a minute or two
             rows.extend(r for r in ex.map(work, syms[i:i + 20]) if r)
             print("screener: %d stocks so far (%ds)" % (len(rows), time.time() - t0), flush=True)
@@ -388,4 +396,3 @@ def screener():
     if time.time() - t > FRESH_SECONDS:
         _start_if_needed()            # refresh in the background, serve the saved copy meanwhile
     return jsonify(data)
-        

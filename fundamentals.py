@@ -272,4 +272,3 @@ def get_fundamentals():
     }
     _cache_set(yahoo_symbol, payload)
     return jsonify(payload)
-   

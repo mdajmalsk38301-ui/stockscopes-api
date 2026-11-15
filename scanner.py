@@ -117,6 +117,13 @@ for _s, (_n, _sec) in EXTRA_STOCKS.items():
 
 _lock = threading.Lock()
 _stale = {"data": None}
+_log = []                                             # last few progress lines, shown at /api/scanner-status
+
+
+def _note(msg):
+    print("scanner:", msg, flush=True)
+    _log.append(datetime.now(timezone.utc).strftime("%H:%M:%S ") + msg)
+    del _log[:-25]
 
 
 # Yahoo uses a shorter code for a few companies. The log showed "TATACONSUMER.NS: No data found".
@@ -201,10 +208,19 @@ def scan_symbol(symbol, df):
 def _scan_batch(syms):
     tickers = [YAHOO_CODE.get(s, s) + ".NS" for s in syms]
     rows = []
-    try:
-        raw = yf.download(tickers, period="1y", interval="1d", group_by="ticker",
-                          progress=False, threads=True, auto_adjust=False, timeout=30)
-    except Exception:
+    raw = None
+    for attempt in (1, 2):                            # one quiet retry: Yahoo sometimes throttles for a few seconds
+        try:
+            raw = yf.download(tickers, period="1y", interval="1d", group_by="ticker",
+                              progress=False, threads=True, auto_adjust=False, timeout=30)
+            if raw is not None and len(raw) > 0:
+                break
+            _note("batch empty on try %d" % attempt)
+        except Exception as e:
+            _note("batch failed on try %d: %s" % (attempt, str(e)[:120]))
+            raw = None
+        time.sleep(6)
+    if raw is None or len(raw) == 0:
         return rows
     for s, t in zip(syms, tickers):
         try:
@@ -240,7 +256,7 @@ def build():
     for i in range(0, len(syms), 25):                # small batches: results show up early and one slow batch cannot hold up the rest
         got = _scan_batch(syms[i:i + 25])
         rows.extend(got)
-        print("scanner: batch %d-%d gave %d rows (%d so far, %ds)" % (i, i + 25, len(got), len(rows), time.time() - t0), flush=True)
+        _note("batch %d-%d gave %d rows (%d so far, %ds)" % (i, i + 25, len(got), len(rows), time.time() - t0))
         if rows and i + 25 < len(syms):
             _publish(rows, True)
         time.sleep(1)
@@ -271,6 +287,12 @@ if not os.environ.get("NO_WARM"):
     _refresh_in_background()                          # warm up when the app starts, so the first visitor is not kept waiting
 
 
+@scanner_bp.route("/api/scanner-status")
+def scanner_status():
+    d = _stale["data"]
+    return jsonify({"busy": _busy["on"], "rows_now": (d or {}).get("count", 0), "partial": (d or {}).get("partial"), "log": list(_log)})
+
+
 @scanner_bp.route("/api/scanner")
 def scanner():
     saved = cache_get("scanner")
@@ -296,4 +318,3 @@ def scanner():
     if _stale["data"]:
         return jsonify(_stale["data"])
     return jsonify({"error": "no data from the market data source"}), 502
-      
