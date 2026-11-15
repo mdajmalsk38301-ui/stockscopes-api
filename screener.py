@@ -46,7 +46,7 @@ try:
     from extra_universe import EXTRA_STOCKS
 except Exception:
     EXTRA_STOCKS = {}
-EXTRA = list(EXTRA_STOCKS)
+EXTRA = []                                        # classic: Nifty 50 + Sensex only
 
 # Where fetch_screener.py (GitHub Actions) saves its file. Set this on Render, for example:
 #   https://raw.githubusercontent.com/YOUR-NAME/stockscopes-api/main/data/screener.json
