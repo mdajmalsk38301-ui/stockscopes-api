@@ -376,6 +376,14 @@ def screener():
                 _state.update(data=data, t=t)
     if data is None:
         _start_if_needed()
+        for _ in range(50):                           # wait up to 25 seconds for the first batch
+            with _lock:
+                d = _state["data"]
+            if d is not None:
+                return jsonify(d)
+            if not _state["building"]:
+                break
+            time.sleep(0.5)
         return jsonify({"building": True, "message": "Collecting company numbers. Try again in a few minutes."}), 503
     if time.time() - t > FRESH_SECONDS:
         _start_if_needed()            # refresh in the background, serve the saved copy meanwhile

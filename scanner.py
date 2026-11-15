@@ -280,6 +280,15 @@ def scanner():
         _refresh_in_background()
         return jsonify(_stale["data"])
     if _busy["on"]:
+        for _ in range(40):                           # wait up to 20 seconds for the first batch
+            if _stale["data"]:
+                return jsonify(_stale["data"])
+            time.sleep(0.5)
+    if _busy["on"]:                                   # first start: wait a little for the first batch instead of failing
+        for _ in range(40):
+            if _stale["data"]:
+                return jsonify(_stale["data"])
+            time.sleep(0.5)
         return jsonify({"building": True, "message": "Collecting prices. Try again in a minute."}), 503
     with _lock:
         _busy["on"] = True
