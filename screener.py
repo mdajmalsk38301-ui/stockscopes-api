@@ -64,7 +64,7 @@ _state = {"data": None, "t": 0, "building": False}
 _lock = threading.Lock()
 
 
-YAHOO_CODE = {"TATACONSUMER": "TATACONSUM"}      # Yahoo uses the shorter code
+YAHOO_CODE = {"TATACONSUMER": "TATACONSUM", "INFOEDGE": "NAUKRI"}      # Yahoo uses the shorter code
 
 
 def universe():

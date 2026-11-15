@@ -127,7 +127,7 @@ def _note(msg):
 
 
 # Yahoo uses a shorter code for a few companies. The log showed "TATACONSUMER.NS: No data found".
-YAHOO_CODE = {"TATACONSUMER": "TATACONSUM"}
+YAHOO_CODE = {"TATACONSUMER": "TATACONSUM", "INFOEDGE": "NAUKRI"}
 
 
 def universe():
