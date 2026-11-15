@@ -111,7 +111,7 @@ try:
     from extra_universe import EXTRA_STOCKS
 except Exception:
     EXTRA_STOCKS = {}
-EXTRA = list(EXTRA_STOCKS)
+EXTRA = []                                        # classic: Nifty 50 + Sensex only
 for _s, (_n, _sec) in EXTRA_STOCKS.items():
     NAMES.setdefault(_s, _n)
 
@@ -205,23 +205,12 @@ def scan_symbol(symbol, df):
     }
 
 
-def _scan_batch(syms):
+def build():
+    syms = universe()
     tickers = [YAHOO_CODE.get(s, s) + ".NS" for s in syms]
+    raw = yf.download(tickers, period="1y", interval="1d", group_by="ticker",
+                      progress=False, threads=True, auto_adjust=False, timeout=25)
     rows = []
-    raw = None
-    for attempt in (1, 2):                            # one quiet retry: Yahoo sometimes throttles for a few seconds
-        try:
-            raw = yf.download(tickers, period="1y", interval="1d", group_by="ticker",
-                              progress=False, threads=True, auto_adjust=False, timeout=30)
-            if raw is not None and len(raw) > 0:
-                break
-            _note("batch empty on try %d" % attempt)
-        except Exception as e:
-            _note("batch failed on try %d: %s" % (attempt, str(e)[:120]))
-            raw = None
-        time.sleep(6)
-    if raw is None or len(raw) == 0:
-        return rows
     for s, t in zip(syms, tickers):
         try:
             row = scan_symbol(s, raw[t][["Close", "High", "Low", "Volume"]])
@@ -232,65 +221,12 @@ def _scan_batch(syms):
                 rows.append(row)
         except Exception:
             continue
-    return rows
-
-
-def _publish(rows, partial):
-    """Make what we have so far available straight away, so the website never waits for the whole list."""
-    data = {
+    return {
         "generated_at": datetime.now(IST).isoformat(),
-        "universe": "Nifty 50 + Sensex" + (" + extra" if EXTRA else ""),
+        "universe": "Nifty 50 + Sensex",
         "count": len(rows),
-        "partial": partial,
-        "rows": list(rows),
+        "rows": rows,
     }
-    _stale["data"] = data
-    cache_set("scanner", data, 90 if partial else CACHE_SECONDS)
-    return data
-
-
-def build():
-    syms = universe()
-    rows = []
-    t0 = time.time()
-    for i in range(0, len(syms), 25):                # small batches: results show up early and one slow batch cannot hold up the rest
-        got = _scan_batch(syms[i:i + 25])
-        rows.extend(got)
-        _note("batch %d-%d gave %d rows (%d so far, %ds)" % (i, i + 25, len(got), len(rows), time.time() - t0))
-        if rows and i + 25 < len(syms):
-            _publish(rows, True)
-        time.sleep(1)
-    return _publish(rows, False) if rows else {"rows": []}
-
-
-_busy = {"on": False}
-
-
-def _refresh():
-    try:
-        build()
-    except Exception as e:
-        print("scanner: build failed:", e, flush=True)
-    finally:
-        _busy["on"] = False
-
-
-def _refresh_in_background():
-    with _lock:
-        if _busy["on"]:
-            return
-        _busy["on"] = True
-    threading.Thread(target=_refresh, daemon=True).start()
-
-
-if not os.environ.get("NO_WARM"):
-    _refresh_in_background()                          # warm up when the app starts, so the first visitor is not kept waiting
-
-
-@scanner_bp.route("/api/scanner-status")
-def scanner_status():
-    d = _stale["data"]
-    return jsonify({"busy": _busy["on"], "rows_now": (d or {}).get("count", 0), "partial": (d or {}).get("partial"), "log": list(_log)})
 
 
 @scanner_bp.route("/api/scanner")
@@ -298,23 +234,20 @@ def scanner():
     saved = cache_get("scanner")
     if saved is not None:
         return jsonify(saved)
-    if _stale["data"]:                                # serve the last good copy now, rebuild quietly
-        _refresh_in_background()
-        return jsonify(_stale["data"])
-    if _busy["on"]:
-        for _ in range(40):                           # wait up to 20 seconds for the first batch
-            if _stale["data"]:
-                return jsonify(_stale["data"])
-            time.sleep(0.5)
-    if _busy["on"]:                                   # first start: wait a little for the first batch instead of failing
-        for _ in range(40):
-            if _stale["data"]:
-                return jsonify(_stale["data"])
-            time.sleep(0.5)
-        return jsonify({"building": True, "message": "Collecting prices. Try again in a minute."}), 503
     with _lock:
-        _busy["on"] = True
-    _refresh()
-    if _stale["data"]:
-        return jsonify(_stale["data"])
-    return jsonify({"error": "no data from the market data source"}), 502
+        saved = cache_get("scanner")
+        if saved is not None:
+            return jsonify(saved)
+        try:
+            data = build()
+        except Exception as e:
+            if _stale["data"]:
+                return jsonify(_stale["data"])
+            return jsonify({"error": "no data from the market data source", "detail": str(e)[:120]}), 502
+        if not data["rows"]:
+            if _stale["data"]:
+                return jsonify(_stale["data"])
+            return jsonify({"error": "no data from the market data source"}), 502
+        _stale["data"] = data
+        cache_set("scanner", data, CACHE_SECONDS)
+        return jsonify(data)
