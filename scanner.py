@@ -15,6 +15,7 @@ Add to your repo:
 To scan more stocks, add lines to extra_universe.py (NSE symbols without .NS).
 The download runs in batches and refreshes in the background, so a few hundred stocks are fine.
 """
+import os
 import time
 import threading
 from datetime import datetime, timezone, timedelta
@@ -266,7 +267,8 @@ def _refresh_in_background():
     threading.Thread(target=_refresh, daemon=True).start()
 
 
-_refresh_in_background()                              # warm up when the app starts, so the first visitor is not kept waiting
+if not os.environ.get("NO_WARM"):
+    _refresh_in_background()                          # warm up when the app starts, so the first visitor is not kept waiting
 
 
 @scanner_bp.route("/api/scanner")

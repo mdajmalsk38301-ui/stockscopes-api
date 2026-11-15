@@ -48,6 +48,10 @@ except Exception:
     EXTRA_STOCKS = {}
 EXTRA = list(EXTRA_STOCKS)
 
+# Where fetch_screener.py (GitHub Actions) saves its file. Set this on Render, for example:
+#   https://raw.githubusercontent.com/YOUR-NAME/stockscopes-api/main/data/screener.json
+SCREENER_JSON_URL = os.environ.get("SCREENER_JSON_URL", "").strip()
+
 # BSE Sensex 30 (NSE symbols), as listed on 24 Oct 2026. BSE reviews the index twice a year (June and December);
 # edit this list when it changes.
 SENSEX = [
@@ -262,7 +266,26 @@ def _probe(symbols):
     return False
 
 
-def build():
+def _from_url():
+    """The saved file made by GitHub Actions, or None."""
+    if not SCREENER_JSON_URL:
+        return None
+    try:
+        import urllib.request
+        with urllib.request.urlopen(SCREENER_JSON_URL, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if isinstance(data, dict) and len(data.get("rows") or []) >= 10:
+            print("screener: loaded %d stocks from the saved GitHub file" % len(data["rows"]), flush=True)
+            return data
+    except Exception as e:
+        print("screener: could not read the GitHub file:", e, flush=True)
+    return None
+
+
+def build(publish=None):
+    saved = _from_url()
+    if saved:
+        return saved
     syms = universe()
     if not _probe(syms[:3]):
         print("screener: Yahoo refused the company-details calls, so no ratios this time (will retry in 6 hours)", flush=True)
@@ -270,20 +293,30 @@ def build():
     fails = {"n": 0}
 
     def work(sym):
-        if fails["n"] >= 12:                       # Yahoo has started refusing: stop asking, keep what we have
+        if fails["n"] >= 12:                      # Yahoo has started refusing: stop asking, keep what we have
             return None
         row = _one(sym)
         fails["n"] = 0 if row else fails["n"] + 1
         return row
 
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        rows = [r for r in ex.map(work, syms) if r]
+    rows, t0 = [], time.time()
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        for i in range(0, len(syms), 20):         # chunks of 20: the website can show the first ones within a minute or two
+            rows.extend(r for r in ex.map(work, syms[i:i + 20]) if r)
+            print("screener: %d stocks so far (%ds)" % (len(rows), time.time() - t0), flush=True)
+            if publish and rows and i + 20 < len(syms):
+                publish(_pack(rows, True))
     print("screener: collected %d of %d stocks" % (len(rows), len(syms)), flush=True)
+    return _pack(rows, False)
+
+
+def _pack(rows, partial):
     return {
         "generated_at": datetime.now(IST).isoformat(),
         "universe": "Nifty 50 + Sensex" + (" + extra" if EXTRA else ""),
         "count": len(rows),
-        "rows": rows,
+        "partial": partial,
+        "rows": list(rows),
     }
 
 
@@ -306,7 +339,10 @@ def _load():
 
 def _worker():
     try:
-        data = build()
+        def _pub(d):
+            with _lock:
+                _state.update(data=d, t=time.time() - FRESH_SECONDS + 600)      # partial: counts as stale in 10 minutes
+        data = build(_pub)
         if data["rows"]:
             with _lock:
                 _state.update(data=data, t=time.time())
