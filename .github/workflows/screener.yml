@@ -1,0 +1,28 @@
+name: Update screener numbers
+
+on:
+  schedule:
+    - cron: "30 12 * * 1-5"      # every weekday, 6:00 pm India time
+  workflow_dispatch:             # also lets you press "Run workflow" by hand
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python fetch_screener.py
+      - name: Save the file
+        run: |
+          git config user.name "screener-bot"
+          git config user.email "screener-bot@users.noreply.github.com"
+          git add data/screener.json
+          git diff --cached --quiet || git commit -m "Update screener numbers [skip render]"
+          git push
