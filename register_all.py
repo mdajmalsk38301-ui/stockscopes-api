@@ -32,4 +32,10 @@ def register_all(app):
             app.register_blueprint(screener_bp)
     except Exception as e:
         print("screener not loaded:", e)
-        
+
+    try:
+        from us_markets import us_bp
+        if us_bp.name not in app.blueprints:
+            app.register_blueprint(us_bp)
+    except Exception as e:
+        print("us_markets not loaded:", e)
