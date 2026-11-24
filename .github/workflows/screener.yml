@@ -2,7 +2,7 @@ name: Update screener numbers
 
 on:
   schedule:
-    - cron: "30 12 * * 1-5"      # every weekday, 6:00 pm India time
+    - cron: "30 12 * * 1-5"      # every weekday,6:00 pm India time
   workflow_dispatch:             # also lets you press "Run workflow" by hand
 
 permissions:
