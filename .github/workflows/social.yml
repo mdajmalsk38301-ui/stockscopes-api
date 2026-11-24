@@ -1,0 +1,19 @@
+
+name: Social posts
+
+# Runs every 30 minutes from 6:30 AM to 11 PM Indian time
+on:
+  schedule:
+    - cron: "*/30 1-17 * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Run the social posting job
+        run: |
+          curl -fsS --max-time 110 -X POST \
+            -H "X-Social-Key: ${{ secrets.SOCIAL_KEY }}" \
+            "${{ secrets.SOCIAL_URL }}"
