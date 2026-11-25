@@ -1,7 +1,7 @@
-
 name: Social posts
 
-# Runs every 30 minute from 6:30 AM to 11 PM Indian time
+# Wakes the StockScopes site every 30 minutes (6:30 AM to 11 PM Indian time).
+# The site decides whether there is anything new to post.
 on:
   schedule:
     - cron: "*/30 1-17 * * *"
@@ -10,10 +10,17 @@ on:
 jobs:
   ping:
     runs-on: ubuntu-latest
-
     steps:
       - name: Run the social posting job
+        env:
+          SOCIAL_KEY: ${{ secrets.SOCIAL_KEY }}
+          SOCIAL_URL: ${{ secrets.SOCIAL_URL }}
         run: |
-          curl -fsS --max-time 110 -X POST \
-            -H "X-Social-Key: ${{ secrets.SOCIAL_KEY }}" \
-            "${{ secrets.SOCIAL_URL }}"
+          KEY=$(printf '%s' "$SOCIAL_KEY" | tr -d '[:space:]')
+          URL=$(printf '%s' "$SOCIAL_URL" | tr -d '[:space:]')
+          if [ -z "$KEY" ] || [ -z "$URL" ]; then echo "A secret is empty: add SOCIAL_KEY and SOCIAL_URL in Settings, Secrets and variables, Actions"; exit 1; fi
+          echo "Calling: $URL (key length ${#KEY})"
+          CODE=$(curl -sS --max-time 110 -X POST -H "X-Social-Key: $KEY" -A "StockScopes-Scheduler/1.0" -o /tmp/reply.txt -w "%{http_code}" "$URL")
+          echo "HTTP status: $CODE"
+          head -c 600 /tmp/reply.txt; echo
+          [ "$CODE" = "200" ]
